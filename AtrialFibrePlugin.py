@@ -3,6 +3,7 @@ import os
 import ast
 import shutil
 import datetime
+import zipfile
 
 try:
     import configparser
@@ -20,6 +21,7 @@ deformExe=os.path.join(deformdir,'deformetrica')
 architecture=os.path.join(scriptdir,'architecture.ini') 
 
 decimatedFile='subject.vtk'
+targetFile='target.vtk'
 datasetFile='data_set.xml'
 modelFile='model.xml'
 optimFile='optimization_parameters.xml'
@@ -33,7 +35,7 @@ dataSigma=0.1
 stepSize=0.000001
 
 #decimate=os.path.join(mirtk,'decimate-surface') # TODO: fix path
-
+decimate='decimate-surface'
 
 objNames=eidolon.enum(
     'atlasmesh',
@@ -72,7 +74,7 @@ def loadArchitecture(path,section):
     return landmarks,lmlines,lmregions,lmstim,lmground
     
 
-def registerSubjectToTarget(subjectObj,targetObj,outdir):
+def registerSubjectToTarget(subjectObj,targetObj,outdir,decimpath,VTK):
     '''
     Register the `subjectObj' mesh to the `targetObj' VTK mesh object putting data into directory `outdir'. The subject 
     will be decimated to have roughly the same number of nodes as the target mesh and then stored as subject.vtk in 
@@ -80,6 +82,7 @@ def registerSubjectToTarget(subjectObj,targetObj,outdir):
     in `outdir'.
     '''
     dpath=os.path.join(outdir,decimatedFile)
+    tmpfile=os.path.join(outdir,'tmp.vtk')
     
     shutil.copy(os.path.join(deformdir,datasetFile),os.path.join(outdir,datasetFile))
     #shutil.copy(os.path.join(deformdir,target),os.path.join(outdir,targetFile))
@@ -105,13 +108,16 @@ def registerSubjectToTarget(subjectObj,targetObj,outdir):
     sizeratio=float(tnodes.n())/snodes.n()
     sizepercent=str(100*(1-sizeratio))[:6] # percent to decimate by
     
+    VTK.saveLegacyFile(tmpfile,subjectObj)
+    
     # decimate the mesh most of the way towards having the same number of nodes as the atlas
-    ret,output=eidolon.execBatchProgram(decimate,subjectObj.getObjFiles()[0],dpath,'-reduceby',sizepercent,'-ascii',logcmd=True)
+    ret,output=eidolon.execBatchProgram(decimpath,tmpfile,dpath,'-reduceby',sizepercent,'-ascii',logcmd=True)
     assert ret==0,output
     
 #    dobj=VTK.loadObject(dpath)
 #    assert dobj.datasets[0].getNodes().n()>0
-    
+
+    VTK.saveLegacyFile(os.path.join(outdir,targetFile),targetObj)
     
     ret,output=eidolon.execBatchProgram(deformExe,"registration", "3D", modelFile, datasetFile, optimFile, "--output-dir=.",cwd=outdir,logcmd=True)
     assert ret==0,output
@@ -216,7 +222,6 @@ class AtrialFibreProject(Project):
         scenemeshes=[o for o in self.memberObjs if isinstance(o,eidolon.MeshSceneObject)]
 
         names=sorted(o.getName() for o in scenemeshes)
-        
         eidolon.fillList(self.afprop.atlasBox,names,self.configMap.get(objNames._atlasmesh,-1))
         eidolon.fillList(self.afprop.endoBox,names,self.configMap.get(objNames._endomesh,-1))
         eidolon.fillList(self.afprop.epiBox,names,self.configMap.get(objNames._epimesh,-1))
@@ -228,6 +233,7 @@ class AtrialFibreProject(Project):
         if not isinstance(obj,eidolon.MeshSceneObject) or obj in self.memberObjs or obj.plugin.getObjFiles(obj) is None:
             return
 
+        @eidolon.timing
         def _copy():
             self.mgr.removeSceneObject(obj)
             filename=self.getProjectFile(obj.getName())
@@ -268,15 +274,17 @@ class AtrialFibreProject(Project):
             
         result=self.AtrialFibre.registerLandmarks(subj,atlas,regtype,tempdir)
         
-        @eidolon.taskroutine('Add points')
-        def _add(task):
-            obj=eidolon.Future.get(result)
-            obj.setName(regtype)
-            self.addObject(obj)
-            self.mgr.addSceneObject(obj)
-            self.save()
-            
-        self.mgr.runTasks(_add())
+        self.mgr.checkFutureResult(result)
+        
+#        @eidolon.taskroutine('Add points')
+#        def _add(task):
+#            obj=eidolon.Future.get(result)
+#            obj.setName(regtype)
+#            self.addObject(obj)
+#            self.mgr.addSceneObject(obj)
+#            self.save()
+#            
+#        self.mgr.runTasks(_add())
         
     def _editLandmarks(self,meshname,regtype):
         pass
@@ -292,6 +300,15 @@ class AtrialFibrePlugin(ScenePlugin):
         
         if self.win!=None:
             self.win.addMenuItem('Project','AtrialFibreProj'+str(plugid),'&Atrial Fibre Project',self._newProjDialog)
+            
+        # extract the deformetrica zip file if not present
+        if not os.path.isdir(deformdir):
+            z=zipfile.ZipFile(deformdir+'.zip')
+            z.extractall(scriptdir)
+            
+        self.mirtkdir=os.path.join(eidolon.getAppDir(),eidolon.LIBSDIR,'MIRTK','Linux')
+        eidolon.addPathVariable('LD_LIBRARY_PATH',self.mirtkdir)
+        self.decimate=os.path.join(self.mirtkdir,decimate)
         
     def _newProjDialog(self):
         def chooseProjDir(name):
@@ -306,24 +323,26 @@ class AtrialFibrePlugin(ScenePlugin):
             self.mgr.createProjectObj(name,parentdir,AtrialFibreProject)
             
 #        self.loadArchitecture(architecture)
-        self.project.save()
+#        self.project.save()
 
     def getCWD(self):
         return self.project.getProjectDir()
         
     @eidolon.taskmethod('Registering landmarks')
     def registerLandmarks(self,meshObj,atlasObj,regtype,outdir,task=None):
+        VTK=self.mgr.getPlugin('VTK')
+        assert VTK is not None
         
-        #output=registerSubjectToTarget(meshobj,atlasobj,outdir)
+        output=registerSubjectToTarget(meshObj,atlasObj,outdir,self.decimate,VTK)
         
-        #eidolon.printFlush(output)
+        eidolon.printFlush(output)
         
-        points=transferLandmarks(architecture,regtype,atlasObj,meshObj,outdir,self.mgr.getPlugin('VTK'))
-        
-        subjnodes=meshObj.datasets[0].getNodes()
-        ptds=eidolon.PyDataSet('pts',[subjnodes[n[0]] for n in points],[('LMMap','',points)])
-        
-        return eidolon.MeshSceneObject('LM',ptds)
+#        points=transferLandmarks(architecture,regtype,atlasObj,meshObj,outdir,VTK)
+#        
+#        subjnodes=meshObj.datasets[0].getNodes()
+#        ptds=eidolon.PyDataSet('pts',[subjnodes[n[0]] for n in points],[('LMMap','',points)])
+#        
+#        return eidolon.MeshSceneObject('LM',ptds)
         
     @eidolon.taskmethod('Generate mesh')  
     def generateMesh(self,task=None):
