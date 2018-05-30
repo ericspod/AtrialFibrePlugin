@@ -17,17 +17,20 @@ import eidolon, ui
 
 scriptdir= os.path.dirname(os.path.abspath(__file__)) # this file's directory
 
+# directory/file names
 uifile=os.path.join(scriptdir,'AtrialFibrePlugin.ui') 
 deformdir=os.path.join(scriptdir,'deformetricaC')
 deformExe=os.path.join(deformdir,'deformetrica')
 architecture=os.path.join(scriptdir,'architecture.ini') 
 
+# registration file names
 decimatedFile='subject.vtk'
 targetFile='target.vtk'
 datasetFile='data_set.xml'
 modelFile='model.xml'
 optimFile='optimization_parameters.xml'
 registeredFile='Registration_subject_to_subject_0__t_9.vtk'
+decimate='decimate-surface'
 
 # deformetrica parameters
 kernelWidthSub=5000
@@ -36,8 +39,8 @@ kernelType='cudaexact'
 dataSigma=0.1
 stepSize=0.000001
 
-#decimate=os.path.join(mirtk,'decimate-surface') # TODO: fix path
-decimate='decimate-surface'
+#
+regionField='regions'
 
 objNames=eidolon.enum(
     'atlasmesh',
@@ -113,10 +116,6 @@ class TriMeshGraph(object):
         return self.nodes.mapIndexRow(self.tris,triindex)
     
     def getSharedNodeTris(self,triindex):
-#        nodes=self.tris[triindex]
-#        filterfunc=lambda t:(t!=triindex and any(n in nodes for n in self.tris[t]))
-#        return filter(filterfunc,range(self.tris.n()))
-
         return listSum([self.nodelem[n] for n in self.tris[triindex]])
         
         
@@ -487,7 +486,6 @@ class AtrialFibreProject(Project):
     def __init__(self,name,parentdir,mgr):
         Project.__init__(self,name,parentdir,mgr)
         self.header='AtrialFibre.createProject(%r,scriptdir+"/..")\n' %(self.name)
-#        self.architecture=None
         
         self.AtrialFibre=mgr.getPlugin('AtrialFibre')
         self.VTK=self.mgr.getPlugin('VTK')
@@ -524,8 +522,11 @@ class AtrialFibreProject(Project):
         setConfigMap(self.afprop.epiBox,objNames._epimesh)
         
         self.afprop.endoReg.clicked.connect(lambda:self._registerLandmarks(objNames._endomesh,regTypes._endo))
-        self.afprop.epiReg.clicked.connect(lambda:self._registerLandmarks(objNames._epimesh,regTypes._epi))
+        self.afprop.endoDiv.clicked.connect(lambda:self._divideRegions(objNames._endomesh,regTypes._endo))
         self.afprop.endoEdit.clicked.connect(lambda:self._editLandmarks(objNames._endomesh,regTypes._endo))
+
+        self.afprop.epiReg.clicked.connect(lambda:self._registerLandmarks(objNames._epimesh,regTypes._epi))
+        self.afprop.epiDiv.clicked.connect(lambda:self._divideRegions(objNames._epimesh,regTypes._epi))
         self.afprop.epiEdit.clicked.connect(lambda:self._editLandmarks(objNames._epimesh,regTypes._epi))
         
         return prop
@@ -593,14 +594,34 @@ class AtrialFibreProject(Project):
         @eidolon.taskroutine('Add points')
         def _add(task):
             obj=eidolon.Future.get(result)
-            obj.setName(regtype)
+            obj.setName(regtype+'nodes')
             self.addMesh(obj)
             
         self.mgr.runTasks(_add())
         
     def _editLandmarks(self,meshname,regtype):
         pass
+    
+    def _divideRegions(self,meshname,regtype):
+        mesh=self.getProjectObj(self.configMap.get(meshname,''))
+        points=self.getProjectObj(regtype+'nodes')
+        
+        assert mesh is not None
+        assert points is not None
+        
+        self.AtrialFibre.divideRegions(mesh,points)
             
+    def _generate(self):
+        endomesh=self.getProjectObj(self.configMap.get(regTypes._endo,''))
+        epimesh=self.getProjectObj(self.configMap.get(regTypes._epi,''))
+        
+        if endomesh.datasets[0].getDataField('regions')==None:
+            self.mgr.showMsg('Endo mesh does not have region field assigned!')
+        elif epimesh.datasets[0].getDataField('regions')==None:
+            self.mgr.showMsg('Epi mesh does not have region field assigned!')
+        else:
+            result=self.AtrialFibre.generateMesh(endomesh,epimesh)
+            self.mgr.addSceneObjectTask(result)
 
 class AtrialFibrePlugin(ScenePlugin):
     def __init__(self):
@@ -619,8 +640,6 @@ class AtrialFibrePlugin(ScenePlugin):
             z.extractall(scriptdir)
             os.chmod(deformExe,stat.S_IRUSR|stat.S_IXUSR|stat.S_IWUSR)
             
-        #eidolon.addPathVariable('LD_LIBRARY_PATH',deformdir)
-            
         self.mirtkdir=os.path.join(eidolon.getAppDir(),eidolon.LIBSDIR,'MIRTK','Linux')
         eidolon.addPathVariable('LD_LIBRARY_PATH',self.mirtkdir)
         self.decimate=os.path.join(self.mirtkdir,decimate)
@@ -636,9 +655,6 @@ class AtrialFibrePlugin(ScenePlugin):
     def createProject(self,name,parentdir):
         if self.project==None:
             self.mgr.createProjectObj(name,parentdir,AtrialFibreProject)
-            
-#        self.loadArchitecture(architecture)
-#        self.project.save()
 
     def getCWD(self):
         return self.project.getProjectDir()
@@ -657,20 +673,14 @@ class AtrialFibrePlugin(ScenePlugin):
         ptds=eidolon.PyDataSet('pts',[subjnodes[n[0]] for n in points],[('LMMap','',points)])
         
         return eidolon.MeshSceneObject('LM',ptds)
-        
-    @eidolon.taskmethod('Generate mesh')  
-    def generateMesh(self,task=None):
+    
+    @eidolon.taskmethod('Dividing mesh into regions')
+    def divideRegions(self,mesh,points,task=None):
         pass
     
-        
-#    def loadArchitecture(self,filename):
-#        if self.project.architecture is not None:
-#            self.mgr.removeSceneObject(self.project.architecture)
-#            
-#        self.project.architecture=eidolon.DatafileSceneObject(objNames._architecture,filename,{},self)
-#        self.project.architecture.load()
-#        self.project.addObject(self.project.architecture)
-#        self.mgr.addSceneObject(self.project.architecture)
+    @eidolon.taskmethod('Generating mesh')  
+    def generateMesh(self,endomesh,epimesh,task=None):
+        pass
 
 
 eidolon.addPlugin(AtrialFibrePlugin())
