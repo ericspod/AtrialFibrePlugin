@@ -1,5 +1,6 @@
 
 import os
+import stat
 import ast
 import shutil
 import datetime
@@ -108,7 +109,7 @@ def registerSubjectToTarget(subjectObj,targetObj,outdir,decimpath,VTK):
     sizeratio=float(tnodes.n())/snodes.n()
     sizepercent=str(100*(1-sizeratio))[:6] # percent to decimate by
     
-    VTK.saveLegacyFile(tmpfile,subjectObj)
+    VTK.saveLegacyFile(tmpfile,subjectObj,datasettype='POLYDATA')
     
     # decimate the mesh most of the way towards having the same number of nodes as the atlas
     ret,output=eidolon.execBatchProgram(decimpath,tmpfile,dpath,'-reduceby',sizepercent,'-ascii',logcmd=True)
@@ -305,6 +306,9 @@ class AtrialFibrePlugin(ScenePlugin):
         if not os.path.isdir(deformdir):
             z=zipfile.ZipFile(deformdir+'.zip')
             z.extractall(scriptdir)
+            os.chmod(deformExe,stat.S_IRUSR|stat.S_IXUSR|stat.S_IWUSR)
+            
+        eidolon.addPathVariable('LD_LIBRARY_PATH',deformdir)
             
         self.mirtkdir=os.path.join(eidolon.getAppDir(),eidolon.LIBSDIR,'MIRTK','Linux')
         eidolon.addPathVariable('LD_LIBRARY_PATH',self.mirtkdir)
