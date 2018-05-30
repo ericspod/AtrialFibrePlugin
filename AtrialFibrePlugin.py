@@ -39,8 +39,9 @@ kernelType='cudaexact'
 dataSigma=0.1
 stepSize=0.000001
 
-#
+# field names
 regionField='regions'
+landmarkField='landmarks'
 
 objNames=eidolon.enum(
     'atlasmesh',
@@ -325,10 +326,6 @@ def subone(v):
     return tuple(i-1 for i in v)
     
 
-#def numPointsAbovePlane(nodes,tri,planept,planenorm):
-#    return sum(1 for t in tri if nodes[t].planeDist(planept,planenorm)>=0)
-    
-
 def findNearestIndex(node,nodelist):
     return min(range(len(nodelist)),key=lambda i:node.distToSq(nodelist[i]))
         
@@ -392,8 +389,6 @@ def findTrisBetweenNodes(start,end,landmarks,graph):
             
         adjacent=first(i for i in allneighbours if i in indices and i not in accepted)
     
-#    accepted=graph.getPath(starttri,endtri,lambda a:(a in accepted))
-        
     # failed to find a straight line path in the selected indices, default to dijsktra shortest path
     if endtri not in accepted:
         accepted=graph.getPath(starttri,endtri)
@@ -404,9 +399,6 @@ def findTrisBetweenNodes(start,end,landmarks,graph):
             accepted=min([accepted,graph.getPath(starttri,endtri,accept)],key=len)
         except:
             pass
-        
-#    accepted+=list(getAdjTo(adj,starttri,endtri))
-#    accepted+=list(indices)
         
     return accepted
     
@@ -457,11 +449,15 @@ def assignRegion(region,index,assignmat,landmarks,graph):
         assignmat[i]=index
     
     
-def generateRegionField(obj,landmarks,regions):
+def generateRegionField(obj,landmarkObjs,regions):
     ds=obj.datasets[0]
     nodes=ds.getNodes()
+    lmnodes=landmarkObjs.datasets[0].getNodes()
+    
 #    tris=ds.getIndexSet('tris')
     tris=first(ind for ind in ds.enumIndexSets() if ind.m()==3 and bool(ind.meta(StdProps._isspatial)))
+    
+    landmarks=[nodes.indexOf(lm)[0] for lm in lmnodes]
     
     graph=TriMeshGraph(nodes,tris)
     
@@ -609,7 +605,7 @@ class AtrialFibreProject(Project):
         assert mesh is not None
         assert points is not None
         
-        self.AtrialFibre.divideRegions(mesh,points)
+        self.AtrialFibre.divideRegions(mesh,points,regtype)
             
     def _generate(self):
         endomesh=self.getProjectObj(self.configMap.get(regTypes._endo,''))
@@ -670,13 +666,25 @@ class AtrialFibrePlugin(ScenePlugin):
         points=transferLandmarks(architecture,regtype,atlasObj,meshObj,outdir,VTK)
         
         subjnodes=meshObj.datasets[0].getNodes()
-        ptds=eidolon.PyDataSet('pts',[subjnodes[n[0]] for n in points],[('LMMap','',points)])
+        ptds=eidolon.PyDataSet('pts',[subjnodes[n[0]] for n in points],[('landmarkField','',points)])
         
         return eidolon.MeshSceneObject('LM',ptds)
     
     @eidolon.taskmethod('Dividing mesh into regions')
-    def divideRegions(self,mesh,points,task=None):
-        pass
+    def divideRegions(self,mesh,points,regtype,task=None):
+        lmregions=loadArchitecture(architecture,regtype)[2]
+        
+        allregions=[list(successive(r,2,True)) for r in lmregions]
+        
+        # TODO: list of bad regions? 
+        badregions={
+            regTypes._endo:[0,14,19,22,24,25],
+            regTypes._epi: [15, 20, 23, 25, 26]
+        }
+        
+        goodregions=[r for i,r in enumerate(allregions) if i not in badregions[regtype]]
+        
+        generateRegionField(mesh,points,goodregions)
     
     @eidolon.taskmethod('Generating mesh')  
     def generateMesh(self,endomesh,epimesh,task=None):
