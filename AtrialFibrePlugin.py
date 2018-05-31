@@ -683,9 +683,13 @@ class AtrialFibrePlugin(ScenePlugin):
     
     @eidolon.taskmethod('Dividing mesh into regions')
     def divideRegions(self,mesh,points,regtype,task=None):
-        lmregions=loadArchitecture(architecture,regtype)[2]
+        lmlines,lmregions=loadArchitecture(architecture,regtype)[1:3]
         
-        allregions=[list(successive(r,2,True)) for r in lmregions]
+        #allregions=[list(successive(r,2,True)) for r in lmregions]
+        
+        allregions=[]
+        for r in lmregions:
+            allregions.append([(a,b) for a,b in lmlines if a in r and b in r])
         
         # TODO: list of bad regions? 
         badregions={
