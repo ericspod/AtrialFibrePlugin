@@ -345,8 +345,10 @@ def findTrisBetweenNodes(start,end,landmarks,graph):
     splane.moveUp(-adjustdist)
     eplane.moveUp(-adjustdist)
     
-    starttri=first(n for n in graph.nodelem[start] if splane.between(graph.getTriNodes(n),eplane))
-    endtri=first(n for n in graph.nodelem[end] if splane.between(graph.getTriNodes(n),eplane))
+#    starttri=first(n for n in graph.nodelem[start] if splane.between(graph.getTriNodes(n),eplane))
+#    endtri=first(n for n in graph.nodelem[end] if splane.between(graph.getTriNodes(n),eplane))
+    starttri=first(graph.nodelem[start])
+    endtri=first(graph.nodelem[end])
     
     assert starttri is not None
     assert endtri is not None
@@ -467,6 +469,7 @@ def generateRegionField(obj,landmarkObjs,regions):
 
     for rindex in range(0,len(regions)):
         region=regions[rindex]
+        eidolon.printFlush(rindex,len(regions),region)
         assignRegion(region,rindex+1,filledregions,landmarks,graph)    
         
     return filledregions
@@ -541,7 +544,7 @@ class AtrialFibreProject(Project):
     def checkIncludeObject(self,obj,task):
         '''Check whether the given object should be added to the project or not.'''
 
-        if not isinstance(obj,eidolon.MeshSceneObject) or obj in self.memberObjs or obj.plugin.getObjFiles(obj) is None:
+        if not isinstance(obj,eidolon.MeshSceneObject) or obj in self.memberObjs or obj.getObjFiles() is None:
             return
 
         @eidolon.timing
@@ -550,7 +553,7 @@ class AtrialFibreProject(Project):
             self.addMesh(obj)
 
         pdir=self.getProjectDir()
-        files=list(map(os.path.abspath,obj.plugin.getObjFiles(obj) or []))
+        files=list(map(os.path.abspath,obj.getObjFiles() or []))
 
         if not files or any(not f.startswith(pdir) for f in files):
             msg="Do you want to add %r to the project? This requires saving/copying the object's file data into the project directory."%(obj.getName())
@@ -580,8 +583,8 @@ class AtrialFibreProject(Project):
         if endo is not None:
             self.mgr.removeSceneObject(endo)
             
-        tempdir=self.createTempDir('reg') 
-        #tempdir=self.getProjectFile('reg20180530150439') 
+#        tempdir=self.createTempDir('reg') 
+        tempdir=self.getProjectFile('reg20180530193140') 
             
         result=self.AtrialFibre.registerLandmarks(subj,atlas,regtype,tempdir)
         
@@ -605,7 +608,15 @@ class AtrialFibreProject(Project):
         assert mesh is not None
         assert points is not None
         
-        self.AtrialFibre.divideRegions(mesh,points,regtype)
+        result=self.AtrialFibre.divideRegions(mesh,points,regtype)
+        
+        self.mgr.checkFutureResult(result)
+        
+        @eidolon.taskroutine('Save mesh')
+        def _save(task):
+            self.VTK.saveObject(mesh,mesh.getObjFiles()[0])
+            
+        self.mgr.runTasks(_save())
             
     def _generate(self):
         endomesh=self.getProjectObj(self.configMap.get(regTypes._endo,''))
@@ -683,7 +694,9 @@ class AtrialFibrePlugin(ScenePlugin):
         }
         
         goodregions=[r for i,r in enumerate(allregions) if i not in badregions[regtype]]
+        goodregions=allregions
         
+        print(len(goodregions))
         generateRegionField(mesh,points,goodregions)
     
     @eidolon.taskmethod('Generating mesh')  
