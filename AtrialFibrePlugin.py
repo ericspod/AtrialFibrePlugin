@@ -119,7 +119,6 @@ class TriMeshGraph(object):
     def getSharedNodeTris(self,triindex):
         return listSum([self.nodelem[n] for n in self.tris[triindex]])
         
-        
     def getPath(self,starttri,endtri,acceptTri=None):
         return dijkstra(self.adj,self.tridists,starttri,endtri,acceptTri)
     
@@ -422,14 +421,11 @@ def assignRegion(region,index,assignmat,landmarks,graph):
                     
         return found
     
-    # collect all tri indices on the borde rof this region
+    # collect all tri indices on the border of this region
     bordertris=set()
     for i,lml in enumerate(region):
         line=findTrisBetweenNodes(lml[0],lml[1],landmarks,graph)
         bordertris.update(line)
-        
-        for l in line:
-            assignmat[l]=index
 
     # find the two subgraphs formed by dividing the graph along the borders, the smaller of the two is the enclosed set of tris
         
@@ -444,14 +440,12 @@ def assignRegion(region,index,assignmat,landmarks,graph):
         
     mingraph=min([subgraph1,subgraph2],key=len) # the smaller graph is the one within the region
 
-    for tri in bordertris:
-        assignmat[tri]=index
-    
-    for i in mingraph:
-        assignmat[i]=index
+    for tri in bordertris.union(mingraph):
+        assignmat[tri,1]=assignmat[tri,0]
+        assignmat[tri,0]=index
     
     
-def generateRegionField(obj,landmarkObjs,regions):
+def generateRegionField(obj,landmarkObjs,regions,task=None):
     ds=obj.datasets[0]
     nodes=ds.getNodes()
     lmnodes=landmarkObjs.datasets[0].getNodes()
@@ -463,14 +457,19 @@ def generateRegionField(obj,landmarkObjs,regions):
     
     graph=TriMeshGraph(nodes,tris)
     
-    filledregions=RealMatrix('regions',tris.n(),1)
-    filledregions.fill(0)
+    filledregions=RealMatrix('regions',tris.n(),2)
+    filledregions.fill(-10)
     ds.setDataField(filledregions)
+
+    if task:
+        task.setMaxProgress(len(regions))
 
     for rindex in range(0,len(regions)):
         region=regions[rindex]
-        eidolon.printFlush(rindex,len(regions),region)
-        assignRegion(region,rindex+1,filledregions,landmarks,graph)    
+        assignRegion(region,rindex,filledregions,landmarks,graph)    
+        
+        if task:
+            task.setProgress(rindex)
         
     return filledregions
 
@@ -583,8 +582,8 @@ class AtrialFibreProject(Project):
         if endo is not None:
             self.mgr.removeSceneObject(endo)
             
-#        tempdir=self.createTempDir('reg') 
-        tempdir=self.getProjectFile('reg20180530193140') 
+        tempdir=self.createTempDir('reg') 
+#        tempdir=self.getProjectFile('reg20180530193140') 
             
         result=self.AtrialFibre.registerLandmarks(subj,atlas,regtype,tempdir)
         
@@ -685,23 +684,11 @@ class AtrialFibrePlugin(ScenePlugin):
     def divideRegions(self,mesh,points,regtype,task=None):
         lmlines,lmregions=loadArchitecture(architecture,regtype)[1:3]
         
-        #allregions=[list(successive(r,2,True)) for r in lmregions]
-        
         allregions=[]
         for r in lmregions:
             allregions.append([(a,b) for a,b in lmlines if a in r and b in r])
         
-        # TODO: list of bad regions? 
-        badregions={
-            regTypes._endo:[0,14,19,22,24,25],
-            regTypes._epi: [15, 20, 23, 25, 26]
-        }
-        
-        goodregions=[r for i,r in enumerate(allregions) if i not in badregions[regtype]]
-        goodregions=allregions
-        
-        print(len(goodregions))
-        generateRegionField(mesh,points,goodregions)
+        generateRegionField(mesh,points,allregions,task)
     
     @eidolon.taskmethod('Generating mesh')  
     def generateMesh(self,endomesh,epimesh,task=None):
