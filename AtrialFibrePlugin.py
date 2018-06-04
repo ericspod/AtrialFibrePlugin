@@ -134,10 +134,12 @@ def loadArchitecture(path,section):
     ground=ast.literal_eval(c.get(section,'ground')) # per region
 #    types=ast.literal_eval(c.get('endo','type')) # per region    
     
-    lmlines=[subone(l) for l in lines if max(l)<=len(landmarks)] # filter out lines with existing node indices
-    lmregions=[subone(r) for r in regions if all(i<=len(landmarks) for i in r)]
+    lmlines=[subone(l) for l in lines if max(l)<=len(landmarks)] # filter for lines with existing node indices
+    lmregions=[subone(r) for r in regions]
     lmstim=stimulus[:len(lmregions)]
     lmground=ground[:len(lmregions)]
+    
+    
 
     return landmarks,lmlines,lmregions,lmstim,lmground
     
@@ -187,7 +189,7 @@ def registerSubjectToTarget(subjectObj,targetObj,outdir,decimpath,VTK):
     return output
 
 
-def transferLandmarks(archFilename,fieldname,sourceObj,subjectObj,outdir,VTK):
+def transferLandmarks(landmarks,sourceObj,subjectObj,outdir,VTK):
     '''
     Register the landmarks defined as node indices on `sourceObj' to equivalent node indices on `subjectObj' via the
     decimated and registered intermediary stored in `outdir'. The result is a list of index pairs associating a node
@@ -196,8 +198,6 @@ def transferLandmarks(archFilename,fieldname,sourceObj,subjectObj,outdir,VTK):
 #    target=os.path.join(outdir,targetFile)
     decimated=os.path.join(outdir,decimatedFile)
     registered=os.path.join(outdir,registeredFile)
-    
-    lmarks=loadArchitecture(archFilename,fieldname)[0]
     
 #    targ=VTK.loadObject(target) # target
     reg=VTK.loadObject(registered) # mesh registered to target
@@ -209,7 +209,7 @@ def transferLandmarks(archFilename,fieldname,sourceObj,subjectObj,outdir,VTK):
     dnodes=dec.datasets[0].getNodes() # unregistered decimated points
     snodes=subjectObj.datasets[0].getNodes() # original subject points
     
-    lmpoints=[(tnodes[m],m) for m in lmarks]
+    lmpoints=[(tnodes[m],m) for m in landmarks]
     
     # TODO: use scipy.spatial.cKDTree?
     def getNearestPointIndex(pt,nodes):
@@ -673,7 +673,9 @@ class AtrialFibrePlugin(ScenePlugin):
         output=registerSubjectToTarget(meshObj,atlasObj,outdir,self.decimate,VTK)
         eidolon.printFlush(output)
         
-        points=transferLandmarks(architecture,regtype,atlasObj,meshObj,outdir,VTK)
+        lmarks=loadArchitecture(architecture,regtype)[0]
+        
+        points=transferLandmarks(lmarks,atlasObj,meshObj,outdir,VTK)
         
         subjnodes=meshObj.datasets[0].getNodes()
         ptds=eidolon.PyDataSet('pts',[subjnodes[n[0]] for n in points],[('landmarkField','',points)])
@@ -686,7 +688,10 @@ class AtrialFibrePlugin(ScenePlugin):
         
         allregions=[]
         for r in lmregions:
-            allregions.append([(a,b) for a,b in lmlines if a in r and b in r])
+            lr=[(a,b) for a,b in lmlines if a in r and b in r]
+            
+            if len(lr)>2:
+                allregions.append(lr)
         
         generateRegionField(mesh,points,allregions,task)
     
