@@ -673,12 +673,13 @@ class AtrialFibrePlugin(ScenePlugin):
         output=registerSubjectToTarget(meshObj,atlasObj,outdir,self.decimate,VTK)
         eidolon.printFlush(output)
         
-        lmarks=loadArchitecture(architecture,regtype)[0]
+        lmarks,lines=loadArchitecture(architecture,regtype)[0:2]
         
         points=transferLandmarks(lmarks,atlasObj,meshObj,outdir,VTK)
         
         subjnodes=meshObj.datasets[0].getNodes()
-        ptds=eidolon.PyDataSet('pts',[subjnodes[n[0]] for n in points],[('landmarkField','',points)])
+        indices=[('lines',eidolon.ElemType._Line1NL,lines),('landmarkField','',points)]
+        ptds=eidolon.PyDataSet('pts',[subjnodes[n[0]] for n in points],indices)
         
         return eidolon.MeshSceneObject('LM',ptds)
     
