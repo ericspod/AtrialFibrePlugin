@@ -279,6 +279,7 @@ def generateNodeElemMap(numnodes,tris):
     return nodemap
     
 
+@eidolon.timing
 def dijkstra(adj,tridists, start, end,acceptTri=None):
     #http://benalexkeen.com/implementing-djikstras-shortest-path-algorithm-with-python/
     # shortest paths is a dict of nodes to previous node and distance
@@ -369,6 +370,11 @@ def findTrisBetweenNodes(start,end,landmarks,graph):
         numabove=lineplane.numPointsAbove(trinodes)
         if numabove in (1,2) and splane.between(trinodes,eplane):    
             indices.add(i)
+            
+#    accepted=list(indices)
+            
+    assert starttri in indices
+    assert endtri in indices
     
     accepted=[starttri]
     
