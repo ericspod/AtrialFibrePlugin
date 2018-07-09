@@ -57,6 +57,18 @@ regTypes=eidolon.enum('endo','epi')
 ui.loadUI(open(uifile).read())
 
 
+def showLines(nodes,lines,name='Lines',matname='Default'):
+    mgr=eidolon.getSceneMgr()
+    lineds=eidolon.LineDataSet(name+'DS',nodes,lines)
+    obj=eidolon.MeshSceneObject(name,lineds)
+    mgr.addSceneObject(obj)
+    
+    rep=obj.createRepr(eidolon.ReprType._line,matname=matname)
+    mgr.addSceneObjectRepr(rep)
+    
+    return obj,rep
+
+
 class initdict(defaultdict):
     def __init__(self,initfunc,*args,**kwargs):
         defaultdict.__init__(self,None,*args,**kwargs)
@@ -101,12 +113,12 @@ class TriMeshGraph(object):
         self.nodes=nodes
         self.tris=tris
         self.tricenters=[avg(nodes.mapIndexRow(tris,r),vec3()) for r in range(tris.n())]
-        self.adj=generateTriAdj(tris)
+        self.adj=generateTriAdj(tris) # elem -> elems
         self.nodelem=generateNodeElemMap(nodes.n(),tris) # node -> elems
         
         def computeDist(key):
             i,j=key
-            return self.tricenters[i].distToSq(self.tricenters[j])
+            return self.tricenters[i].distTo(self.tricenters[j])
             
         self.tridists=initdict(computeDist)
         
@@ -117,10 +129,16 @@ class TriMeshGraph(object):
         return self.nodes.mapIndexRow(self.tris,triindex)
     
     def getSharedNodeTris(self,triindex):
-        return listSum([self.nodelem[n] for n in self.tris[triindex]])
+        tris=set()
+        for n in self.tris[triindex]:
+            tris.update(self.nodelem[n])
+            
+        tris.remove(triindex)
+        return list(sorted(tris))
+#        return listSum([self.nodelem[n] for n in self.tris[triindex]])
         
     def getPath(self,starttri,endtri,acceptTri=None):
-        return dijkstra(self.adj,self.tridists,starttri,endtri,acceptTri)
+        return dijkstra(self.adj,starttri,endtri,lambda i,j:self.tridists[(i,j)],acceptTri)
     
     
 def loadArchitecture(path,section):
@@ -134,12 +152,14 @@ def loadArchitecture(path,section):
     ground=ast.literal_eval(c.get(section,'ground')) # per region
 #    types=ast.literal_eval(c.get('endo','type')) # per region    
     
+#    lmlines=[subone(l) for l in lines if max(l)<=len(landmarks)] # filter out lines with existing node indices
+#    lmregions=[subone(r) for r in regions if all(i<=len(landmarks) for i in r)]
+    
     lmlines=[subone(l) for l in lines if max(l)<=len(landmarks)] # filter for lines with existing node indices
     lmregions=[subone(r) for r in regions]
+    
     lmstim=stimulus[:len(lmregions)]
     lmground=ground[:len(lmregions)]
-    
-    
 
     return landmarks,lmlines,lmregions,lmstim,lmground
     
@@ -189,7 +209,7 @@ def registerSubjectToTarget(subjectObj,targetObj,outdir,decimpath,VTK):
     return output
 
 
-def transferLandmarks(landmarks,sourceObj,subjectObj,outdir,VTK):
+def transferLandmarks(archFilename,fieldname,sourceObj,subjectObj,outdir,VTK):
     '''
     Register the landmarks defined as node indices on `sourceObj' to equivalent node indices on `subjectObj' via the
     decimated and registered intermediary stored in `outdir'. The result is a list of index pairs associating a node
@@ -198,6 +218,8 @@ def transferLandmarks(landmarks,sourceObj,subjectObj,outdir,VTK):
 #    target=os.path.join(outdir,targetFile)
     decimated=os.path.join(outdir,decimatedFile)
     registered=os.path.join(outdir,registeredFile)
+    
+    lmarks=loadArchitecture(archFilename,fieldname)[0]
     
 #    targ=VTK.loadObject(target) # target
     reg=VTK.loadObject(registered) # mesh registered to target
@@ -209,7 +231,7 @@ def transferLandmarks(landmarks,sourceObj,subjectObj,outdir,VTK):
     dnodes=dec.datasets[0].getNodes() # unregistered decimated points
     snodes=subjectObj.datasets[0].getNodes() # original subject points
     
-    lmpoints=[(tnodes[m],m) for m in landmarks]
+    lmpoints=[(tnodes[m],m) for m in lmarks]
     
     # TODO: use scipy.spatial.cKDTree?
     def getNearestPointIndex(pt,nodes):
@@ -279,8 +301,7 @@ def generateNodeElemMap(numnodes,tris):
     return nodemap
     
 
-@eidolon.timing
-def dijkstra(adj,tridists, start, end,acceptTri=None):
+def dijkstra(adj, start, end,distFunc,acceptTri=None):
     #http://benalexkeen.com/implementing-djikstras-shortest-path-algorithm-with-python/
     # shortest paths is a dict of nodes to previous node and distance
     paths = {start: (None,0)}
@@ -300,7 +321,7 @@ def dijkstra(adj,tridists, start, end,acceptTri=None):
         curweight = paths[curnode][1]
 
         for dest in destinations:
-            weight = curweight+tridists[(curnode,dest)] 
+            weight = curweight+distFunc(curnode,dest)
             
             if dest not in paths or weight < paths[dest][1]:
                 paths[dest] = (curnode, weight)
@@ -330,6 +351,30 @@ def findNearestIndex(node,nodelist):
     return min(range(len(nodelist)),key=lambda i:node.distToSq(nodelist[i]))
         
 
+def getContiguousTris(graph,starttri,acceptTri):
+    accepted=[starttri]
+    
+    adjacent=first(i for i in graph.getSharedNodeTris(starttri) if i not in accepted and acceptTri(i))
+    
+    while adjacent is not None:
+        accepted.append(adjacent)
+        
+        #allneighbours=set()
+        #for a in accepted:
+        #    allneighbours.update(graph.getSharedNodeTris(a))
+            
+        #adjacent=first(i for i in allneighbours if acceptTri(i) and i not in accepted)
+        
+        for a in accepted[::-1]:
+            allneighbours=graph.getSharedNodeTris(a)
+            adjacent=first(i for i in allneighbours if i not in accepted and acceptTri(i))
+            if adjacent:
+                break
+        
+    return accepted
+
+
+@eidolon.timing
 def findTrisBetweenNodes(start,end,landmarks,graph):
     start=landmarks[start]
     end=landmarks[end]
@@ -341,7 +386,7 @@ def findTrisBetweenNodes(start,end,landmarks,graph):
     eplane=plane(nodes[end],nodes[start]-nodes[end])
 
     # adjust the plane's positions to account for numeric error
-    adjustdist=1e-1
+    adjustdist=1e1
     splane.moveUp(-adjustdist)
     eplane.moveUp(-adjustdist)
     
@@ -359,8 +404,14 @@ def findTrisBetweenNodes(start,end,landmarks,graph):
     midind=findNearestIndex(midplane.center,[graph.tricenters[m] for m in midinds])
     midtri=graph.tricenters[midinds[midind]]
     
-    # use the midpoint triangle to calculate the normal for the plane on the line between start and end nodes
-    lineplane=plane(splane.center,midtri.planeNorm(splane.center,eplane.center))
+    if False:#midtri.lineDist(splane.center,eplane.center)>0:
+        # use the midpoint triangle to calculate the normal for the plane on the line between start and end nodes
+        linenorm=midtri.planeNorm(splane.center,eplane.center)
+    else:
+        midnodes=graph.getTriNodes(midinds[midind])
+        linenorm=midnodes[0].planeNorm(midnodes[1],midnodes[2]).cross(splane.norm)
+    
+    lineplane=plane(splane.center,linenorm)
     
     indices=set([starttri,endtri]) # list of element indices on lineplane between splane and eplane
     
@@ -370,46 +421,71 @@ def findTrisBetweenNodes(start,end,landmarks,graph):
         numabove=lineplane.numPointsAbove(trinodes)
         if numabove in (1,2) and splane.between(trinodes,eplane):    
             indices.add(i)
-            
-#    accepted=list(indices)
-            
-    assert starttri in indices
-    assert endtri in indices
     
-    accepted=[starttri]
+    accepted=getContiguousTris(graph,starttri,lambda i:i in indices)
     
-    # find the first triangle adjacent to the starting triangle which is in the indices of triangles on the plane
-    adjacent=first(i for i in graph.adj[accepted[-1]] if i in indices and i not in accepted)
-    
-    # if no adjacent triangle found then the first triangle may not be adjacent but does use the `start' node so select that one
-    if adjacent is None:
-        adjacent=first(i for i in graph.nodelem[start] if i in indices)
-        accepted=[]
-    
-    # add each triangle to the accepted list which is contiguous with the starting triangle/node
-    while adjacent is not None:
-        accepted.append(adjacent)
-        
-        allneighbours=set()
-        for a in accepted:
-            allneighbours.update(graph.adj[a])
-            
-        adjacent=first(i for i in allneighbours if i in indices and i not in accepted)
-    
-    # failed to find a straight line path in the selected indices, default to dijsktra shortest path
     if endtri not in accepted:
         accepted=graph.getPath(starttri,endtri)
-    else:
-        try:
-            accept=lambda a:(a in accepted or any(b in accepted for b in graph.getSharedNodeTris(a)))
         
-            accepted=min([accepted,graph.getPath(starttri,endtri,accept)],key=len)
-        except:
-            pass
+        
+        #accepted=dijkstra(graph.adj,starttri,endtri,lambda i,j:graph.tridists[(i,j)])
+#        endaccepted=getContiguousTris(graph,endtri,lambda i:i in indices)
+#        
+#        try:
+#            accepted+=graph.getPath(accepted[-1],endaccepted[-1])
+#        except:
+#            pass
+#        accepted+=endaccepted
+    
+
+#    accepted=[starttri]
+#    
+#    adjacent=first(i for i in graph.getSharedNodeTris(accepted[-1]) if i in indices and i not in accepted)
+#    
+#    while adjacent is not None:
+#        accepted.append(adjacent)
+#        
+#        allneighbours=set()
+#        for a in accepted:
+#            allneighbours.update(graph.getSharedNodeTris(a))
+#            
+#        adjacent=first(i for i in allneighbours if i in indices and i not in accepted)
+
+        
+#    # find the first triangle adjacent to the starting triangle which is in the indices of triangles on the plane
+#    adjacent=first(i for i in graph.adj[accepted[-1]] if i in indices and i not in accepted)
+#    
+#    # if no adjacent triangle found then the first triangle may not be adjacent but does use the `start' node so select that one
+#    if adjacent is None:
+#        adjacent=first(i for i in graph.nodelem[start] if i in indices)
+#        accepted=[]
+#    
+#    # add each triangle to the accepted list which is contiguous with the starting triangle/node
+#    while adjacent is not None:
+#        accepted.append(adjacent)
+#        
+#        allneighbours=set()
+#        for a in accepted:
+#            allneighbours.update(graph.adj[a])
+#            
+#        adjacent=first(i for i in allneighbours if i in indices and i not in accepted)
+    
+#    # failed to find a straight line path in the selected indices, default to dijkstra shortest path
+#    if endtri not in accepted:
+#        accepted=graph.getPath(starttri,endtri)
+#    else:
+#        # choose the dijkstra path if it has fewer nodes
+#        try:
+#            accept=lambda a:(a in accepted or any(b in accepted for b in graph.getSharedNodeTris(a)))
+#        
+#            accepted=min([accepted,graph.getPath(starttri,endtri,accept)],key=len)
+#        except:
+#            pass
         
     return accepted
     
     
+@eidolon.timing
 def assignRegion(region,index,assignmat,landmarks,graph):
 
     def getEnclosedGraph(adj,excludes,start):
@@ -432,23 +508,32 @@ def assignRegion(region,index,assignmat,landmarks,graph):
     for i,lml in enumerate(region):
         line=findTrisBetweenNodes(lml[0],lml[1],landmarks,graph)
         bordertris.update(line)
+        
+        for l in line:
+            assignmat[l]=index+i
 
     # find the two subgraphs formed by dividing the graph along the borders, the smaller of the two is the enclosed set of tris
-        
-    outside1=first(i for i in range(graph.adj.n()) if i not in bordertris) # first tri not on the border
-    subgraph1=getEnclosedGraph(graph.adj,bordertris,outside1) # 
+#        
+#    outside1=first(i for i in range(graph.adj.n()) if i not in bordertris) # first tri not on the border
+#    subgraph1=getEnclosedGraph(graph.adj,bordertris,outside1) # 
+#    
+#    subgraph1tris=set(bordertris)
+#    subgraph1tris.update(subgraph1)
+#    
+#    outside2=first(i for i in range(graph.adj.n()) if i not in subgraph1tris) # first tri not on border or in subgraph1
+#    subgraph2=getEnclosedGraph(graph.adj,subgraph1tris,outside2)
+#        
+#    mingraph=min([subgraph1,subgraph2],key=len) # the smaller graph is the one within the region
+#
+#    for tri in bordertris:
+#        assignmat[tri]=index
+#    
+#    for i in mingraph:
+#        assignmat[i]=index
     
-    subgraph1tris=set(bordertris)
-    subgraph1tris.update(subgraph1)
-    
-    outside2=first(i for i in range(graph.adj.n()) if i not in subgraph1tris) # first tri not on border or in subgraph1
-    subgraph2=getEnclosedGraph(graph.adj,subgraph1tris,outside2)
-        
-    mingraph=min([subgraph1,subgraph2],key=len) # the smaller graph is the one within the region
-
-    for tri in bordertris.union(mingraph):
-        assignmat[tri,1]=assignmat[tri,0]
-        assignmat[tri,0]=index
+#    for tri in bordertris.union(mingraph):
+#        assignmat[tri,1]=assignmat[tri,0]
+#        assignmat[tri,0]=index
     
     
 def generateRegionField(obj,landmarkObjs,regions,task=None):
@@ -463,19 +548,19 @@ def generateRegionField(obj,landmarkObjs,regions,task=None):
     
     graph=TriMeshGraph(nodes,tris)
     
-    filledregions=RealMatrix('regions',tris.n(),2)
+    filledregions=RealMatrix(regionField,tris.n(),1)
     filledregions.fill(-10)
     ds.setDataField(filledregions)
-
+    
     if task:
         task.setMaxProgress(len(regions))
 
     for rindex in range(0,len(regions)):
         region=regions[rindex]
-        assignRegion(region,rindex,filledregions,landmarks,graph)    
-        
+        eidolon.printFlush(rindex,len(regions),region)
+        assignRegion(region,rindex+1,filledregions,landmarks,graph)   
         if task:
-            task.setProgress(rindex)
+            task.setProgress(rindex+1)
         
     return filledregions
 
@@ -588,8 +673,8 @@ class AtrialFibreProject(Project):
         if endo is not None:
             self.mgr.removeSceneObject(endo)
             
-        tempdir=self.createTempDir('reg') 
-#        tempdir=self.getProjectFile('reg20180530193140') 
+#        tempdir=self.createTempDir('reg') 
+        tempdir=self.getProjectFile('reg20180530193140') # TODO: for testing
             
         result=self.AtrialFibre.registerLandmarks(subj,atlas,regtype,tempdir)
         
@@ -620,6 +705,11 @@ class AtrialFibreProject(Project):
         @eidolon.taskroutine('Save mesh')
         def _save(task):
             self.VTK.saveObject(mesh,mesh.getObjFiles()[0])
+            
+            rep=mesh.createRepr(eidolon.ReprType._volume,0)
+            self.mgr.addSceneObjectRepr(rep)
+            rep.applyMaterial('Rainbow',field=regionField)
+            self.mgr.setCameraSeeAll()
             
         self.mgr.runTasks(_save())
             
@@ -679,13 +769,10 @@ class AtrialFibrePlugin(ScenePlugin):
         output=registerSubjectToTarget(meshObj,atlasObj,outdir,self.decimate,VTK)
         eidolon.printFlush(output)
         
-        lmarks,lines=loadArchitecture(architecture,regtype)[0:2]
-        
-        points=transferLandmarks(lmarks,atlasObj,meshObj,outdir,VTK)
+        points=transferLandmarks(architecture,regtype,atlasObj,meshObj,outdir,VTK)
         
         subjnodes=meshObj.datasets[0].getNodes()
-        indices=[('lines',eidolon.ElemType._Line1NL,lines),('landmarkField','',points)]
-        ptds=eidolon.PyDataSet('pts',[subjnodes[n[0]] for n in points],indices)
+        ptds=eidolon.PyDataSet('pts',[subjnodes[n[0]] for n in points],[('landmarkField','',points)])
         
         return eidolon.MeshSceneObject('LM',ptds)
     
@@ -695,12 +782,38 @@ class AtrialFibrePlugin(ScenePlugin):
         
         allregions=[]
         for r in lmregions:
-            lr=[(a,b) for a,b in lmlines if a in r and b in r]
+            lr=[(a,b) for a,b in lmlines if a in r and b in r] # a line defines the region if both endpoints are present
             
             if len(lr)>2:
                 allregions.append(lr)
         
+        
+        allregions=allregions[25:26]
+        
         generateRegionField(mesh,points,allregions,task)
+        
+        lobj,lrep=showLines(points.datasets[0].getNodes(),lmlines,'AllLines','Red')
+        
+#        lmregions=loadArchitecture(architecture,regtype)[2]
+#        
+#        allregions=[list(successive(r,2,True)) for r in lmregions]
+#        
+#        # TODO: list of bad regions? 
+#        badregions={
+#            regTypes._endo:[0,14,19,22,24,25],
+#            regTypes._epi: [15, 20, 23, 25, 26]
+#        }
+#        
+#        goodregions=[r for i,r in enumerate(allregions) if i not in badregions[regtype]]
+#        goodregions=allregions
+#        
+#        print(len(goodregions))
+#        for i,r in enumerate(goodregions):
+#            print('%2i %2i %s'%(i,len(r),r))
+#
+#        goodregions=goodregions[:1]
+#
+#        generateRegionField(mesh,points,goodregions,task)
     
     @eidolon.taskmethod('Generating mesh')  
     def generateMesh(self,endomesh,epimesh,task=None):
