@@ -128,6 +128,10 @@ class TriMeshGraph(object):
     def getTriNodes(self,triindex):
         return self.nodes.mapIndexRow(self.tris,triindex)
     
+    def getTriNorm(self,triindex):
+        a,b,c=self.getTriNodes(triindex)
+        return a.planeNorm(b,c)
+    
     def getSharedNodeTris(self,triindex):
         tris=set()
         for n in self.tris[triindex]:
@@ -289,6 +293,15 @@ def getAdjTo(adj,start,end):
     return found
         
 
+def getExpandedArea(adj,indices,iterations=1):
+    output=set(indices)
+    
+    for _ in range(iterations):
+        for i in set(output):
+            output.update(adj[i])
+            
+    return output
+        
    
 def generateNodeElemMap(numnodes,tris):
     '''Returns a map relating each node index to the set of element indices using that node.'''
@@ -301,6 +314,7 @@ def generateNodeElemMap(numnodes,tris):
     return nodemap
     
 
+@eidolon.timing
 def dijkstra(adj, start, end,distFunc,acceptTri=None):
     #http://benalexkeen.com/implementing-djikstras-shortest-path-algorithm-with-python/
     # shortest paths is a dict of nodes to previous node and distance
@@ -378,38 +392,53 @@ def getContiguousTris(graph,starttri,acceptTri):
 def findTrisBetweenNodes(start,end,landmarks,graph):
     start=landmarks[start]
     end=landmarks[end]
+
+#    starttri=first(n for n in graph.nodelem[start] if splane.between(graph.getTriNodes(n),eplane))
+#    endtri=first(n for n in graph.nodelem[end] if splane.between(graph.getTriNodes(n),eplane))
+    starttri=first(graph.nodelem[start])
+    endtri=first(graph.nodelem[end])
     
     nodes=graph.nodes
+    startnode=nodes[start]
+    endnode=nodes[end]
+    
+    easypath= graph.getPath(starttri,endtri)
+    
+    midnode=graph.tricenters[easypath[len(easypath)//2]]
     
     # define planes to bound the areas to search for triangles to within the space of the line
-    splane=plane(nodes[start],nodes[end]-nodes[start])
-    eplane=plane(nodes[end],nodes[start]-nodes[end])
+#    splane=plane(startnode,endnode-startnode)
+#    eplane=plane(endnode,startnode-endnode)
+    splane=plane(startnode,midnode-startnode)
+    eplane=plane(endnode,midnode-endnode)
+
 
     # adjust the plane's positions to account for numeric error
     adjustdist=1e1
     splane.moveUp(-adjustdist)
     eplane.moveUp(-adjustdist)
     
-#    starttri=first(n for n in graph.nodelem[start] if splane.between(graph.getTriNodes(n),eplane))
-#    endtri=first(n for n in graph.nodelem[end] if splane.between(graph.getTriNodes(n),eplane))
-    starttri=first(graph.nodelem[start])
-    endtri=first(graph.nodelem[end])
     
     assert starttri is not None
     assert endtri is not None
     
-    # find the triangle center nearest to the midpoint of the line
-    midplane=plane((splane.center+eplane.center)*0.5,splane.norm)
-    midinds=midplane.findIntersects(nodes,graph.tris)
-    midind=findNearestIndex(midplane.center,[graph.tricenters[m] for m in midinds])
-    midtri=graph.tricenters[midinds[midind]]
     
-    if False:#midtri.lineDist(splane.center,eplane.center)>0:
-        # use the midpoint triangle to calculate the normal for the plane on the line between start and end nodes
-        linenorm=midtri.planeNorm(splane.center,eplane.center)
-    else:
-        midnodes=graph.getTriNodes(midinds[midind])
-        linenorm=midnodes[0].planeNorm(midnodes[1],midnodes[2]).cross(splane.norm)
+    
+#    # find the triangle center nearest to the midpoint of the line
+#    midplane=plane((splane.center+eplane.center)*0.5,splane.norm)
+#    midinds=midplane.findIntersects(nodes,graph.tris)
+#    midind=findNearestIndex(midplane.center,[graph.tricenters[m] for m in midinds])
+#    midtri=graph.tricenters[midinds[midind]]
+#    
+#    if False:#midtri.lineDist(splane.center,eplane.center)>0:
+#        # use the midpoint triangle to calculate the normal for the plane on the line between start and end nodes
+#        linenorm=midtri.planeNorm(splane.center,eplane.center)
+#    else:
+#        midnodes=graph.getTriNodes(midinds[midind])
+#        linenorm=midnodes[0].planeNorm(midnodes[1],midnodes[2]).cross(splane.norm)
+    
+    #linenorm=avg([graph.getTriNorm(i) for i in easypath],vec3()).cross(splane.center-eplane.center)
+    linenorm=midnode.planeNorm(startnode,endnode)
     
     lineplane=plane(splane.center,linenorm)
     
@@ -425,7 +454,8 @@ def findTrisBetweenNodes(start,end,landmarks,graph):
     accepted=getContiguousTris(graph,starttri,lambda i:i in indices)
     
     if endtri not in accepted:
-        accepted=graph.getPath(starttri,endtri)
+        eidolon.printFlush('---Resorting to easypath')
+        accepted=easypath #graph.getPath(starttri,endtri)
         
         
         #accepted=dijkstra(graph.adj,starttri,endtri,lambda i,j:graph.tridists[(i,j)])
@@ -486,7 +516,7 @@ def findTrisBetweenNodes(start,end,landmarks,graph):
     
     
 @eidolon.timing
-def assignRegion(region,index,assignmat,landmarks,graph):
+def assignRegion(region,index,assignmat,landmarks,linemap,graph):
 
     def getEnclosedGraph(adj,excludes,start):
         visiting=set([start])
@@ -506,11 +536,30 @@ def assignRegion(region,index,assignmat,landmarks,graph):
     # collect all tri indices on the border of this region
     bordertris=set()
     for i,lml in enumerate(region):
-        line=findTrisBetweenNodes(lml[0],lml[1],landmarks,graph)
+        a,b=lml[:2]
+        if (a,b) not in linemap:
+            line=findTrisBetweenNodes(a,b,landmarks,graph)
+            linemap[(a,b)]=line
+            linemap[(b,a)]=line
+        else:
+            line=linemap[(a,b)]
+            
+        #line=findTrisBetweenNodes(lml[0],lml[1],landmarks,graph)
         bordertris.update(line)
         
         for l in line:
-            assignmat[l]=index+i
+            assignmat[l,0]=index+i
+
+    bordertri=graph.tricenters[first(bordertris)]
+    
+    farthest=max(range(len(graph.tris)),key=lambda i:graph.tricenters[i].distToSq(bordertri))
+    
+    maxgraph=getEnclosedGraph(graph.adj,bordertris,farthest)
+    
+    for tri in range(len(graph.tris)):
+        if tri not in maxgraph:
+            assignmat[tri,1]=assignmat[tri,0]
+            assignmat[tri,0]=index            
 
     # find the two subgraphs formed by dividing the graph along the borders, the smaller of the two is the enclosed set of tris
 #        
@@ -540,6 +589,7 @@ def generateRegionField(obj,landmarkObjs,regions,task=None):
     ds=obj.datasets[0]
     nodes=ds.getNodes()
     lmnodes=landmarkObjs.datasets[0].getNodes()
+    linemap={}
     
 #    tris=ds.getIndexSet('tris')
     tris=first(ind for ind in ds.enumIndexSets() if ind.m()==3 and bool(ind.meta(StdProps._isspatial)))
@@ -548,7 +598,7 @@ def generateRegionField(obj,landmarkObjs,regions,task=None):
     
     graph=TriMeshGraph(nodes,tris)
     
-    filledregions=RealMatrix(regionField,tris.n(),1)
+    filledregions=RealMatrix(regionField,tris.n(),2)
     filledregions.fill(-10)
     ds.setDataField(filledregions)
     
@@ -558,7 +608,7 @@ def generateRegionField(obj,landmarkObjs,regions,task=None):
     for rindex in range(0,len(regions)):
         region=regions[rindex]
         eidolon.printFlush(rindex,len(regions),region)
-        assignRegion(region,rindex+1,filledregions,landmarks,graph)   
+        assignRegion(region,rindex+1,filledregions,landmarks,linemap,graph)   
         if task:
             task.setProgress(rindex+1)
         
@@ -708,7 +758,7 @@ class AtrialFibreProject(Project):
             
             rep=mesh.createRepr(eidolon.ReprType._volume,0)
             self.mgr.addSceneObjectRepr(rep)
-            rep.applyMaterial('Rainbow',field=regionField)
+            rep.applyMaterial('Rainbow',field=regionField,valfunc='Column 1')
             self.mgr.setCameraSeeAll()
             
         self.mgr.runTasks(_save())
@@ -717,9 +767,9 @@ class AtrialFibreProject(Project):
         endomesh=self.getProjectObj(self.configMap.get(regTypes._endo,''))
         epimesh=self.getProjectObj(self.configMap.get(regTypes._epi,''))
         
-        if endomesh.datasets[0].getDataField('regions')==None:
+        if endomesh.datasets[0].getDataField('regions') is None:
             self.mgr.showMsg('Endo mesh does not have region field assigned!')
-        elif epimesh.datasets[0].getDataField('regions')==None:
+        elif epimesh.datasets[0].getDataField('regions') is None:
             self.mgr.showMsg('Epi mesh does not have region field assigned!')
         else:
             result=self.AtrialFibre.generateMesh(endomesh,epimesh)
@@ -788,7 +838,7 @@ class AtrialFibrePlugin(ScenePlugin):
                 allregions.append(lr)
         
         
-        allregions=allregions[25:26]
+#        allregions=allregions[:10]
         
         generateRegionField(mesh,points,allregions,task)
         
