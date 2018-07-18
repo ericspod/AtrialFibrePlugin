@@ -5,6 +5,7 @@ import ast
 import shutil
 import datetime
 import zipfile
+from itertools import starmap
 from collections import defaultdict
 
 try:
@@ -114,7 +115,8 @@ class TriMeshGraph(object):
         self.tris=tris
         self.tricenters=[avg(nodes.mapIndexRow(tris,r),vec3()) for r in range(tris.n())]
         self.adj=generateTriAdj(tris) # elem -> elems
-        self.nodelem=generateNodeElemMap(nodes.n(),tris) # node -> elems
+        self.nodeelem=generateNodeElemMap(nodes.n(),tris) # node -> elems
+        self.edges=generateEdgeMap(nodes.n(),tris) # node -> nodes
         
         def computeDist(key):
             i,j=key
@@ -135,11 +137,11 @@ class TriMeshGraph(object):
     def getSharedNodeTris(self,triindex):
         tris=set()
         for n in self.tris[triindex]:
-            tris.update(self.nodelem[n])
+            tris.update(self.nodeelem[n])
             
         tris.remove(triindex)
         return list(sorted(tris))
-#        return listSum([self.nodelem[n] for n in self.tris[triindex]])
+#        return listSum([self.nodeelem[n] for n in self.tris[triindex]])
         
     def getPath(self,starttri,endtri,acceptTri=None):
         return dijkstra(self.adj,starttri,endtri,lambda i,j:self.tridists[(i,j)],acceptTri)
@@ -304,12 +306,24 @@ def getExpandedArea(adj,indices,iterations=1):
         
    
 def generateNodeElemMap(numnodes,tris):
-    '''Returns a map relating each node index to the set of element indices using that node.'''
+    '''Returns a list relating each node index to the set of element indices using that node.'''
     nodemap=[set() for _ in range(numnodes)]
 
     for i,tri in enumerate(tris):
         for n in tri:
             nodemap[n].add(i)
+            
+    return nodemap
+    
+
+def generateEdgeMap(numnodes,tris):
+    '''Returns a list relating each node index to the set of node indices joined to it by graph edges.'''
+    nodemap=[set() for _ in range(numnodes)]
+
+    for a,b,c in tris:
+        nodemap[a].update([b,c])
+        nodemap[b].update([a,c])
+        nodemap[c].update([a,b])
             
     return nodemap
     
@@ -393,10 +407,8 @@ def findTrisBetweenNodes(start,end,landmarks,graph):
     start=landmarks[start]
     end=landmarks[end]
 
-#    starttri=first(n for n in graph.nodelem[start] if splane.between(graph.getTriNodes(n),eplane))
-#    endtri=first(n for n in graph.nodelem[end] if splane.between(graph.getTriNodes(n),eplane))
-    starttri=first(graph.nodelem[start])
-    endtri=first(graph.nodelem[end])
+    starttri=first(graph.nodeelem[start])
+    endtri=first(graph.nodeelem[end])
     
     nodes=graph.nodes
     startnode=nodes[start]
@@ -407,8 +419,6 @@ def findTrisBetweenNodes(start,end,landmarks,graph):
     midnode=graph.tricenters[easypath[len(easypath)//2]]
     
     # define planes to bound the areas to search for triangles to within the space of the line
-#    splane=plane(startnode,endnode-startnode)
-#    eplane=plane(endnode,startnode-endnode)
     splane=plane(startnode,midnode-startnode)
     eplane=plane(endnode,midnode-endnode)
 
@@ -422,22 +432,6 @@ def findTrisBetweenNodes(start,end,landmarks,graph):
     assert starttri is not None
     assert endtri is not None
     
-    
-    
-#    # find the triangle center nearest to the midpoint of the line
-#    midplane=plane((splane.center+eplane.center)*0.5,splane.norm)
-#    midinds=midplane.findIntersects(nodes,graph.tris)
-#    midind=findNearestIndex(midplane.center,[graph.tricenters[m] for m in midinds])
-#    midtri=graph.tricenters[midinds[midind]]
-#    
-#    if False:#midtri.lineDist(splane.center,eplane.center)>0:
-#        # use the midpoint triangle to calculate the normal for the plane on the line between start and end nodes
-#        linenorm=midtri.planeNorm(splane.center,eplane.center)
-#    else:
-#        midnodes=graph.getTriNodes(midinds[midind])
-#        linenorm=midnodes[0].planeNorm(midnodes[1],midnodes[2]).cross(splane.norm)
-    
-    #linenorm=avg([graph.getTriNorm(i) for i in easypath],vec3()).cross(splane.center-eplane.center)
     linenorm=midnode.planeNorm(startnode,endnode)
     
     lineplane=plane(splane.center,linenorm)
@@ -455,62 +449,7 @@ def findTrisBetweenNodes(start,end,landmarks,graph):
     
     if endtri not in accepted:
         eidolon.printFlush('---Resorting to easypath')
-        accepted=easypath #graph.getPath(starttri,endtri)
-        
-        
-        #accepted=dijkstra(graph.adj,starttri,endtri,lambda i,j:graph.tridists[(i,j)])
-#        endaccepted=getContiguousTris(graph,endtri,lambda i:i in indices)
-#        
-#        try:
-#            accepted+=graph.getPath(accepted[-1],endaccepted[-1])
-#        except:
-#            pass
-#        accepted+=endaccepted
-    
-
-#    accepted=[starttri]
-#    
-#    adjacent=first(i for i in graph.getSharedNodeTris(accepted[-1]) if i in indices and i not in accepted)
-#    
-#    while adjacent is not None:
-#        accepted.append(adjacent)
-#        
-#        allneighbours=set()
-#        for a in accepted:
-#            allneighbours.update(graph.getSharedNodeTris(a))
-#            
-#        adjacent=first(i for i in allneighbours if i in indices and i not in accepted)
-
-        
-#    # find the first triangle adjacent to the starting triangle which is in the indices of triangles on the plane
-#    adjacent=first(i for i in graph.adj[accepted[-1]] if i in indices and i not in accepted)
-#    
-#    # if no adjacent triangle found then the first triangle may not be adjacent but does use the `start' node so select that one
-#    if adjacent is None:
-#        adjacent=first(i for i in graph.nodelem[start] if i in indices)
-#        accepted=[]
-#    
-#    # add each triangle to the accepted list which is contiguous with the starting triangle/node
-#    while adjacent is not None:
-#        accepted.append(adjacent)
-#        
-#        allneighbours=set()
-#        for a in accepted:
-#            allneighbours.update(graph.adj[a])
-#            
-#        adjacent=first(i for i in allneighbours if i in indices and i not in accepted)
-    
-#    # failed to find a straight line path in the selected indices, default to dijkstra shortest path
-#    if endtri not in accepted:
-#        accepted=graph.getPath(starttri,endtri)
-#    else:
-#        # choose the dijkstra path if it has fewer nodes
-#        try:
-#            accept=lambda a:(a in accepted or any(b in accepted for b in graph.getSharedNodeTris(a)))
-#        
-#            accepted=min([accepted,graph.getPath(starttri,endtri,accept)],key=len)
-#        except:
-#            pass
+        accepted=easypath 
         
     return accepted
     
@@ -559,30 +498,7 @@ def assignRegion(region,index,assignmat,landmarks,linemap,graph):
     for tri in range(len(graph.tris)):
         if tri not in maxgraph:
             assignmat[tri,1]=assignmat[tri,0]
-            assignmat[tri,0]=index            
-
-    # find the two subgraphs formed by dividing the graph along the borders, the smaller of the two is the enclosed set of tris
-#        
-#    outside1=first(i for i in range(graph.adj.n()) if i not in bordertris) # first tri not on the border
-#    subgraph1=getEnclosedGraph(graph.adj,bordertris,outside1) # 
-#    
-#    subgraph1tris=set(bordertris)
-#    subgraph1tris.update(subgraph1)
-#    
-#    outside2=first(i for i in range(graph.adj.n()) if i not in subgraph1tris) # first tri not on border or in subgraph1
-#    subgraph2=getEnclosedGraph(graph.adj,subgraph1tris,outside2)
-#        
-#    mingraph=min([subgraph1,subgraph2],key=len) # the smaller graph is the one within the region
-#
-#    for tri in bordertris:
-#        assignmat[tri]=index
-#    
-#    for i in mingraph:
-#        assignmat[i]=index
-    
-#    for tri in bordertris.union(mingraph):
-#        assignmat[tri,1]=assignmat[tri,0]
-#        assignmat[tri,0]=index
+            assignmat[tri,0]=index 
     
     
 def generateRegionField(obj,landmarkObjs,regions,task=None):
@@ -614,6 +530,56 @@ def generateRegionField(obj,landmarkObjs,regions,task=None):
         
     return filledregions
 
+
+def extractTriRegion(nodes,tris,acceptFunc):
+    #old -> new
+    newnodes=[]
+    newtris=[]
+    nodemap={}
+    trimap={}
+    
+    for tri in range(len(tris)):
+        if acceptFunc(tri):
+            newtri=list(tris[tri])
+            
+            for i,n in enumerate(newtri):
+                if n not in nodemap:
+                    nodemap[n]=len(newnodes)
+                    newnodes.append(nodes[n])
+                    
+                newtri[i]=nodemap[n]
+                
+            trimap[tri]=len(newtris)
+            newtris.append(newtri)
+            
+    return newnodes,newtris,nodemap,trimap
+
+
+def calculateGradientDirs(graph,gradientField):
+    '''
+    Returns a RealMatrix object containing the vector field for each node of `graph' pointing in the gradient direction
+    for the given field RealMatrix object `gradientField'.
+    '''
+    def directionalDeriv(grad,edgevec):
+        '''Calculates the derivative in the direction of the edge `edgevec' with gradient value `grad'.'''
+        edgelen=edgevec.len()
+        return (edgevec/edgelen)*(grad/edgelen)
+
+    numnodes=len(graph.nodes)
+    nodedirs=eidolon.RealMatrix('dirs',numnodes,3)
+    
+    #https://math.stackexchange.com/questions/2627946/how-to-approximate-numerically-the-gradient-of-the-function-on-a-triangular-mesh
+    
+    for n in range(numnodes):
+        ngrad=gradientField[n]
+        nnode=graph.nodes[n]
+        edgegrads=[gradientField[i]-ngrad for i in graph.edges[n]]
+        edgedirs=[graph.nodes[i]-nnode for i in graph.edges[n]]
+        
+        nodedirs[n]=sum(starmap(directionalDeriv, zip(edgegrads,edgedirs)),vec3()).norm()
+        
+    return nodedirs
+    
 
 class AtrialFibrePropWidget(ui.QtWidgets.QWidget,ui.Ui_AtrialFibre):
     def __init__(self,parent=None):
@@ -842,28 +808,7 @@ class AtrialFibrePlugin(ScenePlugin):
         
         generateRegionField(mesh,points,allregions,task)
         
-        lobj,lrep=showLines(points.datasets[0].getNodes(),lmlines,'AllLines','Red')
-        
-#        lmregions=loadArchitecture(architecture,regtype)[2]
-#        
-#        allregions=[list(successive(r,2,True)) for r in lmregions]
-#        
-#        # TODO: list of bad regions? 
-#        badregions={
-#            regTypes._endo:[0,14,19,22,24,25],
-#            regTypes._epi: [15, 20, 23, 25, 26]
-#        }
-#        
-#        goodregions=[r for i,r in enumerate(allregions) if i not in badregions[regtype]]
-#        goodregions=allregions
-#        
-#        print(len(goodregions))
-#        for i,r in enumerate(goodregions):
-#            print('%2i %2i %s'%(i,len(r),r))
-#
-#        goodregions=goodregions[:1]
-#
-#        generateRegionField(mesh,points,goodregions,task)
+#        lobj,lrep=showLines(points.datasets[0].getNodes(),lmlines,'AllLines','Red')
     
     @eidolon.taskmethod('Generating mesh')  
     def generateMesh(self,endomesh,epimesh,task=None):
