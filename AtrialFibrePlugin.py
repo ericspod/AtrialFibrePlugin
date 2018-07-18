@@ -475,19 +475,24 @@ def assignRegion(region,index,assignmat,landmarks,linemap,graph):
     # collect all tri indices on the border of this region
     bordertris=set()
     for i,lml in enumerate(region):
-        a,b=lml[:2]
-        if (a,b) not in linemap:
+        a,b=region[lml][:2]
+        
+        if (a,b) in linemap:
+            line=linemap[(a,b)]
+        else:
             line=findTrisBetweenNodes(a,b,landmarks,graph)
             linemap[(a,b)]=line
             linemap[(b,a)]=line
-        else:
-            line=linemap[(a,b)]
+            
+            # assign line ID to triangles on the line
+            for tri in line:
+                assignmat[tri,2]=lml+1
             
         #line=findTrisBetweenNodes(lml[0],lml[1],landmarks,graph)
         bordertris.update(line)
         
         for l in line:
-            assignmat[l,0]=index+i
+            assignmat[l,0]=index
 
     bordertri=graph.tricenters[first(bordertris)]
     
@@ -514,9 +519,9 @@ def generateRegionField(obj,landmarkObjs,regions,task=None):
     
     graph=TriMeshGraph(nodes,tris)
     
-    filledregions=RealMatrix(regionField,tris.n(),2)
+    filledregions=RealMatrix(regionField,tris.n(),3)
+    filledregions.meta(StdProps._elemdata,'True')
     filledregions.fill(-10)
-    ds.setDataField(filledregions)
     
     if task:
         task.setMaxProgress(len(regions))
@@ -528,7 +533,7 @@ def generateRegionField(obj,landmarkObjs,regions,task=None):
         if task:
             task.setProgress(rindex+1)
         
-    return filledregions
+    return filledregions,linemap
 
 
 def extractTriRegion(nodes,tris,acceptFunc):
@@ -798,15 +803,19 @@ class AtrialFibrePlugin(ScenePlugin):
         
         allregions=[]
         for r in lmregions:
-            lr=[(a,b) for a,b in lmlines if a in r and b in r] # a line defines the region if both endpoints are present
+#            lr=[(a,b) for a,b in lmlines if a in r and b in r] # a line defines the region if both endpoints are present
             
+            lr={i:(a,b) for i,(a,b) in enumerate(lmlines) if a in r and b in r}
             if len(lr)>2:
                 allregions.append(lr)
         
         
 #        allregions=allregions[:10]
         
-        generateRegionField(mesh,points,allregions,task)
+        filledregions,linemap=generateRegionField(mesh,points,allregions,task)
+        mesh.datasets[0].setDataField(filledregions)
+        
+        
         
 #        lobj,lrep=showLines(points.datasets[0].getNodes(),lmlines,'AllLines','Red')
     
