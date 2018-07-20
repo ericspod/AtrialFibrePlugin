@@ -1,10 +1,32 @@
+# Eidolon Biomedical Framework
+# Copyright (C) 2016-8 Eric Kerfoot, King's College London, all rights reserved
+# 
+# This file is part of Eidolon.
+#
+# Eidolon is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+# 
+# Eidolon is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+# 
+# You should have received a copy of the GNU General Public License along
+# with this program (LICENSE.txt).  If not, see <http://www.gnu.org/licenses/>
+'''
+Atrial fibre generation plugin.
+'''
 
+import sys
 import os
 import stat
 import ast
 import shutil
 import datetime
 import zipfile
+import warnings
 from itertools import starmap
 from collections import defaultdict
 
@@ -12,9 +34,16 @@ try:
     import configparser
 except ImportError:
     import ConfigParser as configparser
+    
+try:
+    from sfepy.base.conf import ProblemConf
+    from sfepy.applications import solve_pde
+except ImportError:
+    warnings.warn('SfePy needs to be installed or in PYTHONPATH to generate fiber directions.')
 
 from eidolon import ScenePlugin, Project, avg, vec3, listSum, successive, first, RealMatrix, IndexMatrix, StdProps
 import eidolon, ui
+
 
 scriptdir= os.path.dirname(os.path.abspath(__file__)) # this file's directory
 
@@ -169,6 +198,113 @@ def loadArchitecture(path,section):
 
     return landmarks,lmlines,lmregions,lmstim,lmground
     
+
+def getProblemConf(inputfile,outdir,activenodes,groundnodes,funmod=None):
+    filename_mesh=inputfile
+
+    material_2 = {
+        'name' : 'coef',
+        'values' : {'val' : 1.0},
+    }
+    
+    regions = {
+        'Omega' : 'all', # or 'cells of group 6'
+        'Active' : ('vertex '+','.join(map(str,activenodes)), 'vertex'),
+        'Ground' : ('vertex '+','.join(map(str,groundnodes)), 'vertex'),
+    }
+    
+#    region_1000 = {
+#        'name' : 'Omega',
+#        'select' : 'cells of group 3',
+#    }
+#    
+#    region_03 = {
+#        'name' : 'Gamma_Left',
+#        'select' : 'vertices in (x < -0.999999)',
+#        'kind' : 'facet',
+#    }
+#    
+#    region_4 = {
+#        'name' : 'Gamma_Right',
+#        'select' : 'vertices in (x > 0.999999)',
+#        'kind' : 'facet',
+#    }
+    
+    field_1 = {
+        'name' : 'temperature',
+        'dtype' : 'real',
+        'shape' : (1,),
+        'region' : 'Omega',
+        'approx_order' : 1,
+    }
+    
+    variable_1 = {
+        'name' : 't',
+        'kind' : 'unknown field',
+        'field' : 'temperature',
+        'order' : 0, # order in the global vector of unknowns
+    }
+    
+    variable_2 = {
+        'name' : 's',
+        'kind' : 'test field',
+        'field' : 'temperature',
+        'dual' : 't',
+    }
+    
+    ebc_1 = {
+        'name' : 't1',
+        'region' : 'Active',
+        'dofs' : {'t.0' : 1.0},
+    }
+    
+    ebc_2 = {
+        'name' : 't2',
+        'region' : 'Ground',
+        'dofs' : {'t.0' : 0.0},
+    }
+    
+    integral_1 = {
+        'name' : 'i',
+        'order' : 2,
+    }
+    
+    equations = {
+        'Temperature' : """dw_laplace.i.Omega( coef.val, s, t ) = 0"""
+    }
+    
+    solver_0 = {
+        'name' : 'ls',
+        'kind' : 'ls.scipy_direct',
+        'method' : 'auto',
+    }
+    
+    solver_1 = {
+        'name' : 'newton',
+        'kind' : 'nls.newton',
+    
+        'i_max'      : 1,
+        'eps_a'      : 1e-10,
+        'eps_r'      : 1.0,
+        'macheps'   : 1e-16,
+        'lin_red'    : 1e-2, # Linear system error < (eps_a * lin_red).
+        'ls_red'     : 0.1,
+        'ls_red_warp' : 0.001,
+        'ls_on'      : 1.1,
+        'ls_min'     : 1e-5,
+        'check'     : 0,
+        'delta'     : 1e-6,
+    }
+    
+    options = {
+        'nls' : 'newton',
+        'ls' : 'ls',
+        'output_format' : 'vtk',
+        'output_dir':outdir,
+    }
+    
+    return ProblemConf.from_dict(locals(),funmod or sys.modules[__name__])
+
 
 def registerSubjectToTarget(subjectObj,targetObj,outdir,decimpath,VTK):
     '''
