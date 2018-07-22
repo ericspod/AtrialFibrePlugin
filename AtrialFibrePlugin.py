@@ -44,6 +44,7 @@ except ImportError:
 from eidolon import ScenePlugin, Project, avg, vec3, listSum, successive, first, RealMatrix, IndexMatrix, StdProps, timing
 import eidolon, ui
 
+import numpy as np
 
 scriptdir= os.path.dirname(os.path.abspath(__file__)) # this file's directory
 
@@ -52,6 +53,7 @@ uifile=os.path.join(scriptdir,'AtrialFibrePlugin.ui')
 deformdir=os.path.join(scriptdir,'deformetricaC')
 deformExe=os.path.join(deformdir,'deformetrica')
 architecture=os.path.join(scriptdir,'architecture.ini') 
+problemFile=os.path.join(scriptdir,'problemfile.py') 
 
 # registration file names
 decimatedFile='subject.vtk'
@@ -220,6 +222,12 @@ def loadArchitecture(path,section):
 
 def getProblemConf(inputfile,outdir,activenodes,groundnodes,funmod=None):
     filename_mesh=inputfile
+    
+    if len(activenodes)==0:
+        raise ValueError('No activenodes given')
+
+    if len(groundnodes)==0:
+        raise ValueError('No groundnodes given')
 
     material_2 = {
         'name' : 'coef',
@@ -306,6 +314,31 @@ def getProblemConf(inputfile,outdir,activenodes,groundnodes,funmod=None):
     }
     
     return ProblemConf.from_dict(locals(),funmod or sys.modules[__name__])
+
+
+def writeMeshFile(filename,nodes,tris,nodegroup,trigroup,dim):
+    with open(filename,'w') as o:
+        print('MeshVersionFormatted 1',file=o)
+        print('Dimension %i'%dim,file=o)
+        print('Vertices',file=o)
+        print(len(nodes),file=o)
+        
+        for n in range(len(nodes)):
+            for v in tuple(nodes[n])[:dim]:
+                print('%20.10f'%v,end=' ',file=o)
+                
+            group=0 if nodegroup is None else nodegroup[n]
+            
+            print(group,file=o)
+            
+        print('Triangles',file=o)
+        print(len(tris),file=o)
+        
+        for n in range(len(tris)):
+            print(*['%.20i'%(t+1) for t in tris[n]],file=o,end=' ')
+            group=0 if trigroup is None else trigroup[n]
+            
+            print(group,file=o)
 
 
 def registerSubjectToTarget(subjectObj,targetObj,outdir,decimpath,VTK):
@@ -597,7 +630,7 @@ def findTrisBetweenNodes(start,end,landmarks,graph):
     
 @timing
 def assignRegion(region,index,assignmat,landmarks,linemap,graph):
-
+    
     def getEnclosedGraph(adj,excludes,start):
         visiting=set([start])
         found=set()
@@ -629,8 +662,8 @@ def assignRegion(region,index,assignmat,landmarks,linemap,graph):
             
         bordertris.update(line)
         
-        for l in line:
-            assignmat[l,0]=index
+#        for tri in line:
+#            addRegion(tri,index)
 
     bordertri=graph.tricenters[first(bordertris)]
     
@@ -639,9 +672,13 @@ def assignRegion(region,index,assignmat,landmarks,linemap,graph):
     maxgraph=getEnclosedGraph(graph.adj,bordertris,farthest)
     
     for tri in range(len(graph.tris)):
-        if tri not in maxgraph:
-            assignmat[tri,1]=assignmat[tri,0]
-            assignmat[tri,0]=index 
+        if tri not in maxgraph or tri in bordertris:
+            if assignmat[tri,0]<0:
+                assignmat[tri,0]=index
+            elif assignmat[tri,1]<0:
+                assignmat[tri,1]=index
+#            assignmat[tri,1]=assignmat[tri,0]
+#            assignmat[tri,0]=index 
     
     
 @timing
@@ -735,6 +772,7 @@ def calculateDirectionField(obj,landmarkObj,regions,regtype,tempdir,VTK):
     nodes=ds.getNodes()
     tris=first(ind for ind in ds.enumIndexSets() if ind.m()==3 and bool(ind.meta(StdProps._isspatial)))
     regionfield=ds.getDataField(regionField)
+    regionfield=np.asarray(regionfield,np.int32)
     
     lmnodes=landmarkObj.datasets[0].getNodes()
     landmarks=[nodes.indexOf(lm)[0] for lm in lmnodes]
@@ -753,19 +791,35 @@ def calculateDirectionField(obj,landmarkObj,regions,regtype,tempdir,VTK):
                         nodeinds.update(nodemap[t] for t in tris[tri])
             else:
                 nodeinds.add(nodemap[landmarks[int(comp[1:])-1]])
+                
+        return nodeinds
+    
     
     for r in regions:
-        rfile=os.path.join(tempdir,'region%2i.vtk'%r)
+        rfile=os.path.join(tempdir,'region%.2i.mesh'%r)
+        pfile=os.path.join(tempdir,'region%.2i.py'%r)
         newnodes,newtris,nodemap,trimap=extractTriRegion(nodes,tris,lambda i:r in regionfield[i,:2])
         
-        tmpds=eidolon.TriDataSet('tmpDS',newnodes,newtris)
-        tempobj=eidolon.MeshSceneObject('tmp',tmpds)
-        VTK.saveLegacyFile(rfile,tempobj,datasettype='POLYDATA')
+        assert len(newtris)>0, 'Empty region selected'
+        
+#        tmpds=eidolon.TriDataSet('tmpDS',newnodes,newtris)
+#        tempobj=eidolon.MeshSceneObject('tmp',tmpds)
+#        VTK.saveLegacyFile(rfile,tempobj)
+        
+        
         
         stimnodes=collectNodes(nodemap,trimap,lmstim[r])
         groundnodes=collectNodes(nodemap,trimap,lmground[r])
         
-        p=getProblemConf(rfile,tempdir,stimnodes,groundnodes)
+        nodegroup=[1 if n in stimnodes else 2 if n in groundnodes else 0 for n in range(len(newnodes))]
+        writeMeshFile(rfile,newnodes,newtris,nodegroup,None,3)
+        
+        with open(problemFile) as p:
+            with open(pfile,'w') as o:
+                o.write(p.read()%{'inputfile':rfile,'outdir':tempdir})
+            
+        #p=getProblemConf(rfile,tempdir,stimnodes,groundnodes)
+        p=ProblemConf.from_file(pfile)
         solve_pde(p)
     
 
@@ -939,7 +993,8 @@ class AtrialFibreProject(Project):
             epipoints=self.getProjectObj('epinodes')
             
             result=self.AtrialFibre.generateMesh(endomesh,epimesh,endopoints,epipoints,tempdir)
-            self.mgr.addSceneObjectTask(result)
+            self.mgr.checkFutureResult(result)
+#            self.mgr.addSceneObjectTask(result)
 
 
 class AtrialFibrePlugin(ScenePlugin):
