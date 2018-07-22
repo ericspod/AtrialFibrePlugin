@@ -41,7 +41,7 @@ try:
 except ImportError:
     warnings.warn('SfePy needs to be installed or in PYTHONPATH to generate fiber directions.')
 
-from eidolon import ScenePlugin, Project, avg, vec3, listSum, successive, first, RealMatrix, IndexMatrix, StdProps
+from eidolon import ScenePlugin, Project, avg, vec3, listSum, successive, first, RealMatrix, IndexMatrix, StdProps, timing
 import eidolon, ui
 
 
@@ -72,6 +72,7 @@ stepSize=0.000001
 # field names
 regionField='regions'
 landmarkField='landmarks'
+directionField='directions'
 
 objNames=eidolon.enum(
     'atlasmesh',
@@ -177,6 +178,16 @@ class TriMeshGraph(object):
     
     
 def loadArchitecture(path,section):
+    '''
+    Load the architecture from the given file `path' and return values from the given section (endo or epi). The
+    return value is a tuple containing:
+        landmarks: 0-based indices of landmark nodes in the atlas
+        lmlines  : 0-based index pairs defining lines between indices in landmarks
+        lmregions: a list of maps each defining a retion, which are mappings from a 0-based index into lmlines to the 
+                   line's landmark index pair
+        lmstim   : a per-region specifier list stating which lines (L# for index #) or atlas node (N#) defines stimulation
+        lground  : a per-region specifier list stating which lines (L# for index #) or atlas node (N#) defines ground
+    '''
     c=configparser.SafeConfigParser()
     assert len(c.read(path))>0
     
@@ -195,8 +206,16 @@ def loadArchitecture(path,section):
     
     lmstim=stimulus[:len(lmregions)]
     lmground=ground[:len(lmregions)]
+    
+    allregions=[]
+    for r in lmregions:
+#            lr=[(a,b) for a,b in lmlines if a in r and b in r] # a line defines the region if both endpoints are present
+        
+        lr={i:(a,b) for i,(a,b) in enumerate(lmlines) if a in r and b in r}
+        if len(lr)>2:
+            allregions.append(lr)
 
-    return landmarks,lmlines,lmregions,lmstim,lmground
+    return landmarks,lmlines,allregions,lmstim,lmground
     
 
 def getProblemConf(inputfile,outdir,activenodes,groundnodes,funmod=None):
@@ -212,23 +231,6 @@ def getProblemConf(inputfile,outdir,activenodes,groundnodes,funmod=None):
         'Active' : ('vertex '+','.join(map(str,activenodes)), 'vertex'),
         'Ground' : ('vertex '+','.join(map(str,groundnodes)), 'vertex'),
     }
-    
-#    region_1000 = {
-#        'name' : 'Omega',
-#        'select' : 'cells of group 3',
-#    }
-#    
-#    region_03 = {
-#        'name' : 'Gamma_Left',
-#        'select' : 'vertices in (x < -0.999999)',
-#        'kind' : 'facet',
-#    }
-#    
-#    region_4 = {
-#        'name' : 'Gamma_Right',
-#        'select' : 'vertices in (x > 0.999999)',
-#        'kind' : 'facet',
-#    }
     
     field_1 = {
         'name' : 'temperature',
@@ -416,6 +418,7 @@ def generateTriAdj(tris):
     return result
 
 
+@timing
 def getAdjTo(adj,start,end):
     '''Returns a subgraph of `adj',represented as a node->[neighbours] dict, which includes nodes `start' and `end'.'''
     visiting=set([start])
@@ -464,7 +467,7 @@ def generateEdgeMap(numnodes,tris):
     return nodemap
     
 
-@eidolon.timing
+@timing
 def dijkstra(adj, start, end,distFunc,acceptTri=None):
     #http://benalexkeen.com/implementing-djikstras-shortest-path-algorithm-with-python/
     # shortest paths is a dict of nodes to previous node and distance
@@ -538,7 +541,7 @@ def getContiguousTris(graph,starttri,acceptTri):
     return accepted
 
 
-@eidolon.timing
+@timing
 def findTrisBetweenNodes(start,end,landmarks,graph):
     start=landmarks[start]
     end=landmarks[end]
@@ -568,7 +571,9 @@ def findTrisBetweenNodes(start,end,landmarks,graph):
     assert starttri is not None
     assert endtri is not None
     
-    linenorm=midnode.planeNorm(startnode,endnode)
+    #linenorm=midnode.planeNorm(startnode,endnode)
+    #linenorm=graph.getTriNorm(easypath[len(easypath)//2]).cross(midnode-startnode)
+    linenorm=eidolon.avg(graph.getTriNorm(e) for e in easypath).cross(midnode-startnode)
     
     lineplane=plane(splane.center,linenorm)
     
@@ -590,7 +595,7 @@ def findTrisBetweenNodes(start,end,landmarks,graph):
     return accepted
     
     
-@eidolon.timing
+@timing
 def assignRegion(region,index,assignmat,landmarks,linemap,graph):
 
     def getEnclosedGraph(adj,excludes,start):
@@ -610,9 +615,7 @@ def assignRegion(region,index,assignmat,landmarks,linemap,graph):
     
     # collect all tri indices on the border of this region
     bordertris=set()
-    for i,lml in enumerate(region):
-        a,b=region[lml][:2]
-        
+    for lineindex,(a,b) in region.items():
         if (a,b) in linemap:
             line=linemap[(a,b)]
         else:
@@ -622,9 +625,8 @@ def assignRegion(region,index,assignmat,landmarks,linemap,graph):
             
             # assign line ID to triangles on the line
             for tri in line:
-                assignmat[tri,2]=lml+1
+                assignmat[tri,2]=lineindex
             
-        #line=findTrisBetweenNodes(lml[0],lml[1],landmarks,graph)
         bordertris.update(line)
         
         for l in line:
@@ -642,14 +644,13 @@ def assignRegion(region,index,assignmat,landmarks,linemap,graph):
             assignmat[tri,0]=index 
     
     
-def generateRegionField(obj,landmarkObjs,regions,task=None):
+@timing
+def generateRegionField(obj,landmarkObj,regions,task=None):
     ds=obj.datasets[0]
     nodes=ds.getNodes()
-    lmnodes=landmarkObjs.datasets[0].getNodes()
-    linemap={}
-    
-#    tris=ds.getIndexSet('tris')
     tris=first(ind for ind in ds.enumIndexSets() if ind.m()==3 and bool(ind.meta(StdProps._isspatial)))
+    lmnodes=landmarkObj.datasets[0].getNodes()
+    linemap={}
     
     landmarks=[nodes.indexOf(lm)[0] for lm in lmnodes]
     
@@ -662,10 +663,9 @@ def generateRegionField(obj,landmarkObjs,regions,task=None):
     if task:
         task.setMaxProgress(len(regions))
 
-    for rindex in range(0,len(regions)):
-        region=regions[rindex]
+    for rindex,region in enumerate(regions):
         eidolon.printFlush(rindex,len(regions),region)
-        assignRegion(region,rindex+1,filledregions,landmarks,linemap,graph)   
+        assignRegion(region,rindex,filledregions,landmarks,linemap,graph)   
         if task:
             task.setProgress(rindex+1)
         
@@ -673,11 +673,16 @@ def generateRegionField(obj,landmarkObjs,regions,task=None):
 
 
 def extractTriRegion(nodes,tris,acceptFunc):
+    '''
+    Extract the region from the mesh (nodes,tris) as defined by the triangle acceptance function `acceptFunc'. The return
+    value is a tuple containing the list of new nodes, a list of new tris, a map from old node indices in `nodes' to new 
+    indices in the returned node list, and a map from triangle indices in `tris' to new ones in the returned triangle list.
+    '''
     #old -> new
-    newnodes=[]
-    newtris=[]
-    nodemap={}
-    trimap={}
+    newnodes=[] # new node set
+    newtris=[] # new triangle set
+    nodemap={} # maps old node indices to new
+    trimap={} # maps old triangle indices to new
     
     for tri in range(len(tris)):
         if acceptFunc(tri):
@@ -720,6 +725,48 @@ def calculateGradientDirs(graph,gradientField):
         nodedirs[n]=sum(starmap(directionalDeriv, zip(edgegrads,edgedirs)),vec3()).norm()
         
     return nodedirs
+    
+
+@timing
+def calculateDirectionField(obj,landmarkObj,regions,regtype,tempdir,VTK):
+    _,lmlines,allregions,lmstim,lmground=loadArchitecture(architecture,regtype)
+    
+    ds=obj.datasets[0]
+    nodes=ds.getNodes()
+    tris=first(ind for ind in ds.enumIndexSets() if ind.m()==3 and bool(ind.meta(StdProps._isspatial)))
+    regionfield=ds.getDataField(regionField)
+    
+    lmnodes=landmarkObj.datasets[0].getNodes()
+    landmarks=[nodes.indexOf(lm)[0] for lm in lmnodes]
+    
+    directionfield=RealMatrix(directionField,7,nodes.n())
+    directionfield.fill(-1)
+    
+    def collectNodes(nodemap,trimap,components):
+        nodeinds=set()
+        for comp in components:
+            if comp[0]=='L':
+                lind=int(comp[1:])-1
+                
+                for tri in trimap:
+                    if int(regionfield[tri,2])==lind:
+                        nodeinds.update(nodemap[t] for t in tris[tri])
+            else:
+                nodeinds.add(nodemap[landmarks[int(comp[1:])-1]])
+    
+    for r in regions:
+        rfile=os.path.join(tempdir,'region%2i.vtk'%r)
+        newnodes,newtris,nodemap,trimap=extractTriRegion(nodes,tris,lambda i:r in regionfield[i,:2])
+        
+        tmpds=eidolon.TriDataSet('tmpDS',newnodes,newtris)
+        tempobj=eidolon.MeshSceneObject('tmp',tmpds)
+        VTK.saveLegacyFile(rfile,tempobj,datasettype='POLYDATA')
+        
+        stimnodes=collectNodes(nodemap,trimap,lmstim[r])
+        groundnodes=collectNodes(nodemap,trimap,lmground[r])
+        
+        p=getProblemConf(rfile,tempdir,stimnodes,groundnodes)
+        solve_pde(p)
     
 
 class AtrialFibrePropWidget(ui.QtWidgets.QWidget,ui.Ui_AtrialFibre):
@@ -775,6 +822,8 @@ class AtrialFibreProject(Project):
         self.afprop.epiDiv.clicked.connect(lambda:self._divideRegions(objNames._epimesh,regTypes._epi))
         self.afprop.epiEdit.clicked.connect(lambda:self._editLandmarks(objNames._epimesh,regTypes._epi))
         
+        self.afprop.genButton.clicked.connect(self._generate)
+        
         return prop
         
     def updatePropBox(self,proj,prop):
@@ -794,7 +843,7 @@ class AtrialFibreProject(Project):
         if not isinstance(obj,eidolon.MeshSceneObject) or obj in self.memberObjs or obj.getObjFiles() is None:
             return
 
-        @eidolon.timing
+        @timing
         def _copy():
             self.mgr.removeSceneObject(obj)
             self.addMesh(obj)
@@ -868,19 +917,30 @@ class AtrialFibreProject(Project):
             rep.applyMaterial('Rainbow',field=regionField,valfunc='Column 1')
             self.mgr.setCameraSeeAll()
             
+#            lobj,lrep=showLines(points.datasets[0].getNodes(),lmlines,'AllLines','Red')
+            
         self.mgr.runTasks(_save())
             
     def _generate(self):
-        endomesh=self.getProjectObj(self.configMap.get(regTypes._endo,''))
-        epimesh=self.getProjectObj(self.configMap.get(regTypes._epi,''))
+        endomesh=self.getProjectObj(self.configMap.get(objNames._endomesh,''))
+        epimesh=self.getProjectObj(self.configMap.get(objNames._epimesh,''))
         
-        if endomesh.datasets[0].getDataField('regions') is None:
+        if endomesh is None:
+            self.mgr.showMsg('Cannot find endo mesh %r'%self.configMap.get(objNames._endomesh,''))
+        elif epimesh is None:
+            self.mgr.showMsg('Cannot find epi mesh %r'%self.configMap.get(objNames._epimesh,''))
+        elif endomesh.datasets[0].getDataField('regions') is None:
             self.mgr.showMsg('Endo mesh does not have region field assigned!')
         elif epimesh.datasets[0].getDataField('regions') is None:
             self.mgr.showMsg('Epi mesh does not have region field assigned!')
         else:
-            result=self.AtrialFibre.generateMesh(endomesh,epimesh)
+            tempdir=self.createTempDir('dirs') 
+            endopoints=self.getProjectObj('endonodes')
+            epipoints=self.getProjectObj('epinodes')
+            
+            result=self.AtrialFibre.generateMesh(endomesh,epimesh,endopoints,epipoints,tempdir)
             self.mgr.addSceneObjectTask(result)
+
 
 class AtrialFibrePlugin(ScenePlugin):
     def __init__(self):
@@ -889,6 +949,9 @@ class AtrialFibrePlugin(ScenePlugin):
 
     def init(self,plugid,win,mgr):
         ScenePlugin.init(self,plugid,win,mgr)
+        self.VTK=self.mgr.getPlugin('VTK')
+        
+        assert self.VTK is not None, 'Cannot find VTK plugin!'
         
         if self.win!=None:
             self.win.addMenuItem('Project','AtrialFibreProj'+str(plugid),'&Atrial Fibre Project',self._newProjDialog)
@@ -920,13 +983,10 @@ class AtrialFibrePlugin(ScenePlugin):
         
     @eidolon.taskmethod('Registering landmarks')
     def registerLandmarks(self,meshObj,atlasObj,regtype,outdir,task=None):
-        VTK=self.mgr.getPlugin('VTK')
-        assert VTK is not None
-        
-        output=registerSubjectToTarget(meshObj,atlasObj,outdir,self.decimate,VTK)
+        output=registerSubjectToTarget(meshObj,atlasObj,outdir,self.decimate,self.VTK)
         eidolon.printFlush(output)
         
-        points=transferLandmarks(architecture,regtype,atlasObj,meshObj,outdir,VTK)
+        points=transferLandmarks(architecture,regtype,atlasObj,meshObj,outdir,self.VTK)
         
         subjnodes=meshObj.datasets[0].getNodes()
         ptds=eidolon.PyDataSet('pts',[subjnodes[n[0]] for n in points],[('landmarkField','',points)])
@@ -937,27 +997,12 @@ class AtrialFibrePlugin(ScenePlugin):
     def divideRegions(self,mesh,points,regtype,task=None):
         lmlines,lmregions=loadArchitecture(architecture,regtype)[1:3]
         
-        allregions=[]
-        for r in lmregions:
-#            lr=[(a,b) for a,b in lmlines if a in r and b in r] # a line defines the region if both endpoints are present
-            
-            lr={i:(a,b) for i,(a,b) in enumerate(lmlines) if a in r and b in r}
-            if len(lr)>2:
-                allregions.append(lr)
-        
-        
-#        allregions=allregions[:10]
-        
-        filledregions,linemap=generateRegionField(mesh,points,allregions,task)
+        filledregions,linemap=generateRegionField(mesh,points,lmregions,task)
         mesh.datasets[0].setDataField(filledregions)
         
-        
-        
-#        lobj,lrep=showLines(points.datasets[0].getNodes(),lmlines,'AllLines','Red')
-    
     @eidolon.taskmethod('Generating mesh')  
-    def generateMesh(self,endomesh,epimesh,task=None):
-        pass
+    def generateMesh(self,endomesh,epimesh,endopoints,epipoints,outdir,task=None):
+        calculateDirectionField(endomesh,endopoints,[0],regTypes._endo,outdir,self.VTK)
 
 
 eidolon.addPlugin(AtrialFibrePlugin())
