@@ -36,13 +36,13 @@ variable_2 = {
 ebc_1 = {
     'name' : 't1',
     'region' : 'Active',
-    'dofs' : {'t.0' : 1.0},
+    'dofs' : {'t.0' : 0.0},
 }
 
 ebc_2 = {
     'name' : 't2',
     'region' : 'Ground',
-    'dofs' : {'t.0' : 0.0},
+    'dofs' : {'t.0' : 1.0},
 }
 
 integral_1 = {

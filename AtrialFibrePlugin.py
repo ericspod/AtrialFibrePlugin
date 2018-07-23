@@ -19,7 +19,6 @@
 Atrial fibre generation plugin.
 '''
 
-import sys
 import os
 import stat
 import ast
@@ -41,7 +40,7 @@ try:
 except ImportError:
     warnings.warn('SfePy needs to be installed or in PYTHONPATH to generate fiber directions.')
 
-from eidolon import ScenePlugin, Project, avg, vec3, listSum, successive, first, RealMatrix, IndexMatrix, StdProps, timing
+from eidolon import ScenePlugin, Project, avg, vec3, successive, first, RealMatrix, IndexMatrix, StdProps, timing
 import eidolon, ui
 
 import numpy as np
@@ -200,121 +199,21 @@ def loadArchitecture(path,section):
     ground=ast.literal_eval(c.get(section,'ground')) # per region
 #    types=ast.literal_eval(c.get('endo','type')) # per region    
     
-#    lmlines=[subone(l) for l in lines if max(l)<=len(landmarks)] # filter out lines with existing node indices
-#    lmregions=[subone(r) for r in regions if all(i<=len(landmarks) for i in r)]
-    
     lmlines=[subone(l) for l in lines if max(l)<=len(landmarks)] # filter for lines with existing node indices
     lmregions=[subone(r) for r in regions]
+#    lmregions=[subone(r) for r in regions if all(i<=len(landmarks) for i in r)]
     
     lmstim=stimulus[:len(lmregions)]
     lmground=ground[:len(lmregions)]
     
     allregions=[]
     for r in lmregions:
-#            lr=[(a,b) for a,b in lmlines if a in r and b in r] # a line defines the region if both endpoints are present
-        
         lr={i:(a,b) for i,(a,b) in enumerate(lmlines) if a in r and b in r}
         if len(lr)>2:
             allregions.append(lr)
 
     return landmarks,lmlines,allregions,lmstim,lmground
     
-
-def getProblemConf(inputfile,outdir,activenodes,groundnodes,funmod=None):
-    filename_mesh=inputfile
-    
-    if len(activenodes)==0:
-        raise ValueError('No activenodes given')
-
-    if len(groundnodes)==0:
-        raise ValueError('No groundnodes given')
-
-    material_2 = {
-        'name' : 'coef',
-        'values' : {'val' : 1.0},
-    }
-    
-    regions = {
-        'Omega' : 'all', # or 'cells of group 6'
-        'Active' : ('vertex '+','.join(map(str,activenodes)), 'vertex'),
-        'Ground' : ('vertex '+','.join(map(str,groundnodes)), 'vertex'),
-    }
-    
-    field_1 = {
-        'name' : 'temperature',
-        'dtype' : 'real',
-        'shape' : (1,),
-        'region' : 'Omega',
-        'approx_order' : 1,
-    }
-    
-    variable_1 = {
-        'name' : 't',
-        'kind' : 'unknown field',
-        'field' : 'temperature',
-        'order' : 0, # order in the global vector of unknowns
-    }
-    
-    variable_2 = {
-        'name' : 's',
-        'kind' : 'test field',
-        'field' : 'temperature',
-        'dual' : 't',
-    }
-    
-    ebc_1 = {
-        'name' : 't1',
-        'region' : 'Active',
-        'dofs' : {'t.0' : 1.0},
-    }
-    
-    ebc_2 = {
-        'name' : 't2',
-        'region' : 'Ground',
-        'dofs' : {'t.0' : 0.0},
-    }
-    
-    integral_1 = {
-        'name' : 'i',
-        'order' : 2,
-    }
-    
-    equations = {
-        'Temperature' : """dw_laplace.i.Omega( coef.val, s, t ) = 0"""
-    }
-    
-    solver_0 = {
-        'name' : 'ls',
-        'kind' : 'ls.scipy_direct',
-        'method' : 'auto',
-    }
-    
-    solver_1 = {
-        'name' : 'newton',
-        'kind' : 'nls.newton',
-    
-        'i_max'      : 1,
-        'eps_a'      : 1e-10,
-        'eps_r'      : 1.0,
-        'macheps'   : 1e-16,
-        'lin_red'    : 1e-2, # Linear system error < (eps_a * lin_red).
-        'ls_red'     : 0.1,
-        'ls_red_warp' : 0.001,
-        'ls_on'      : 1.1,
-        'ls_min'     : 1e-5,
-        'check'     : 0,
-        'delta'     : 1e-6,
-    }
-    
-    options = {
-        'nls' : 'newton',
-        'ls' : 'ls',
-        'output_format' : 'vtk',
-        'output_dir':outdir,
-    }
-    
-    return ProblemConf.from_dict(locals(),funmod or sys.modules[__name__])
-
 
 def writeMeshFile(filename,nodes,tris,nodegroup,trigroup,dim):
     with open(filename,'w') as o:
@@ -331,11 +230,11 @@ def writeMeshFile(filename,nodes,tris,nodegroup,trigroup,dim):
             
             print(group,file=o)
             
-        print('Triangles',file=o)
+        print('Triangles' if len(tris[0])==3 else 'Tetrahedra',file=o)
         print(len(tris),file=o)
         
         for n in range(len(tris)):
-            print(*['%.20i'%(t+1) for t in tris[n]],file=o,end=' ')
+            print(*['%10i'%(t+1) for t in tris[n]],file=o,end=' ')
             group=0 if trigroup is None else trigroup[n]
             
             print(group,file=o)
@@ -392,16 +291,13 @@ def transferLandmarks(archFilename,fieldname,sourceObj,subjectObj,outdir,VTK):
     decimated and registered intermediary stored in `outdir'. The result is a list of index pairs associating a node
     index in `subjectObj' for every landmark index in `sourceObj'.
     '''
-#    target=os.path.join(outdir,targetFile)
     decimated=os.path.join(outdir,decimatedFile)
     registered=os.path.join(outdir,registeredFile)
     
     lmarks=loadArchitecture(archFilename,fieldname)[0]
     
-#    targ=VTK.loadObject(target) # target
     reg=VTK.loadObject(registered) # mesh registered to target
     dec=VTK.loadObject(decimated) # decimated unregistered mesh
-    #subj=VTK.loadObject(subject) # original mesh which was decimated then registered
     
     tnodes=sourceObj.datasets[0].getNodes() # target points
     rnodes=reg.datasets[0].getNodes() # registered decimated points
@@ -465,16 +361,6 @@ def getAdjTo(adj,start,end):
         visiting.update(n for n in neighbours if n not in found)
                 
     return found
-        
-
-def getExpandedArea(adj,indices,iterations=1):
-    output=set(indices)
-    
-    for _ in range(iterations):
-        for i in set(output):
-            output.update(adj[i])
-            
-    return output
         
    
 def generateNodeElemMap(numnodes,tris):
@@ -559,12 +445,6 @@ def getContiguousTris(graph,starttri,acceptTri):
     while adjacent is not None:
         accepted.append(adjacent)
         
-        #allneighbours=set()
-        #for a in accepted:
-        #    allneighbours.update(graph.getSharedNodeTris(a))
-            
-        #adjacent=first(i for i in allneighbours if acceptTri(i) and i not in accepted)
-        
         for a in accepted[::-1]:
             allneighbours=graph.getSharedNodeTris(a)
             adjacent=first(i for i in allneighbours if i not in accepted and acceptTri(i))
@@ -604,6 +484,7 @@ def findTrisBetweenNodes(start,end,landmarks,graph):
     assert starttri is not None
     assert endtri is not None
     
+    # TODO: plane normal determination still needs work
     #linenorm=midnode.planeNorm(startnode,endnode)
     #linenorm=graph.getTriNorm(easypath[len(easypath)//2]).cross(midnode-startnode)
     linenorm=eidolon.avg(graph.getTriNorm(e) for e in easypath).cross(midnode-startnode)
@@ -662,9 +543,6 @@ def assignRegion(region,index,assignmat,landmarks,linemap,graph):
             
         bordertris.update(line)
         
-#        for tri in line:
-#            addRegion(tri,index)
-
     bordertri=graph.tricenters[first(bordertris)]
     
     farthest=max(range(len(graph.tris)),key=lambda i:graph.tricenters[i].distToSq(bordertri))
@@ -677,8 +555,6 @@ def assignRegion(region,index,assignmat,landmarks,linemap,graph):
                 assignmat[tri,0]=index
             elif assignmat[tri,1]<0:
                 assignmat[tri,1]=index
-#            assignmat[tri,1]=assignmat[tri,0]
-#            assignmat[tri,0]=index 
     
     
 @timing
@@ -777,8 +653,13 @@ def calculateDirectionField(obj,landmarkObj,regions,regtype,tempdir,VTK):
     lmnodes=landmarkObj.datasets[0].getNodes()
     landmarks=[nodes.indexOf(lm)[0] for lm in lmnodes]
     
-    directionfield=RealMatrix(directionField,7,nodes.n())
-    directionfield.fill(-1)
+    directionfield=RealMatrix(directionField,nodes.n(),3)
+    directionfield.fill(-10)
+    
+    gradientfield=RealMatrix('gradient',nodes.n(),1)
+    gradientfield.fill(-1)
+    
+    obj.datasets[0].setDataField(gradientfield)
     
     def collectNodes(nodemap,trimap,components):
         nodeinds=set()
@@ -794,22 +675,23 @@ def calculateDirectionField(obj,landmarkObj,regions,regtype,tempdir,VTK):
                 
         return nodeinds
     
-    
     for r in regions:
         rfile=os.path.join(tempdir,'region%.2i.mesh'%r)
+        ofile=os.path.join(tempdir,'region%.2i.vtk'%r)
         pfile=os.path.join(tempdir,'region%.2i.py'%r)
         newnodes,newtris,nodemap,trimap=extractTriRegion(nodes,tris,lambda i:r in regionfield[i,:2])
         
         assert len(newtris)>0, 'Empty region selected'
         
-#        tmpds=eidolon.TriDataSet('tmpDS',newnodes,newtris)
-#        tempobj=eidolon.MeshSceneObject('tmp',tmpds)
-#        VTK.saveLegacyFile(rfile,tempobj)
-        
-        
-        
         stimnodes=collectNodes(nodemap,trimap,lmstim[r])
         groundnodes=collectNodes(nodemap,trimap,lmground[r])
+        
+        # convert triangles to tets
+        for t in range(len(newtris)):
+            a,b,c=[newnodes[i] for i in newtris[t]]
+            norm=a.planeNorm(b,c)
+            newtris[t].append(len(newnodes))
+            newnodes.append(avg((a,b,c))+norm)
         
         nodegroup=[1 if n in stimnodes else 2 if n in groundnodes else 0 for n in range(len(newnodes))]
         writeMeshFile(rfile,newnodes,newtris,nodegroup,None,3)
@@ -818,10 +700,16 @@ def calculateDirectionField(obj,landmarkObj,regions,regtype,tempdir,VTK):
             with open(pfile,'w') as o:
                 o.write(p.read()%{'inputfile':rfile,'outdir':tempdir})
             
-        #p=getProblemConf(rfile,tempdir,stimnodes,groundnodes)
         p=ProblemConf.from_file(pfile)
         solve_pde(p)
+        
+        robj=VTK.loadObject(ofile)
+        gfield=robj.datasets[0].getDataField('t')
+        
+        for oldn,newn in nodemap.items():
+            gradientfield[oldn,0]=gfield[newn]
     
+### Project objects
 
 class AtrialFibrePropWidget(ui.QtWidgets.QWidget,ui.Ui_AtrialFibre):
     def __init__(self,parent=None):
@@ -1033,9 +921,6 @@ class AtrialFibrePlugin(ScenePlugin):
         if self.project==None:
             self.mgr.createProjectObj(name,parentdir,AtrialFibreProject)
 
-    def getCWD(self):
-        return self.project.getProjectDir()
-        
     @eidolon.taskmethod('Registering landmarks')
     def registerLandmarks(self,meshObj,atlasObj,regtype,outdir,task=None):
         output=registerSubjectToTarget(meshObj,atlasObj,outdir,self.decimate,self.VTK)
@@ -1057,7 +942,8 @@ class AtrialFibrePlugin(ScenePlugin):
         
     @eidolon.taskmethod('Generating mesh')  
     def generateMesh(self,endomesh,epimesh,endopoints,epipoints,outdir,task=None):
-        calculateDirectionField(endomesh,endopoints,[0],regTypes._endo,outdir,self.VTK)
+        calculateDirectionField(endomesh,endopoints,[5],regTypes._endo,outdir,self.VTK)
 
+### Add the project
 
-eidolon.addPlugin(AtrialFibrePlugin())
+eidolon.addPlugin(AtrialFibrePlugin()) # note this occurs after other projects are loaded and is not in the subprocesses namespaces
