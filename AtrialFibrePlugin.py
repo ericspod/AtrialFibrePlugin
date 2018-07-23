@@ -37,6 +37,7 @@ except ImportError:
 try:
     from sfepy.base.conf import ProblemConf
     from sfepy.applications import solve_pde
+    from sfepy.base.base import output
 except ImportError:
     warnings.warn('SfePy needs to be installed or in PYTHONPATH to generate fiber directions.')
 
@@ -49,8 +50,8 @@ scriptdir= os.path.dirname(os.path.abspath(__file__)) # this file's directory
 
 # directory/file names
 uifile=os.path.join(scriptdir,'AtrialFibrePlugin.ui') 
-deformdir=os.path.join(scriptdir,'deformetricaC')
-deformExe=os.path.join(deformdir,'deformetrica')
+deformDir=os.path.join(scriptdir,'deformetricaC')
+deformExe=os.path.join(deformDir,'deformetrica')
 architecture=os.path.join(scriptdir,'architecture.ini') 
 problemFile=os.path.join(scriptdir,'problemfile.py') 
 
@@ -249,9 +250,9 @@ def registerSubjectToTarget(subjectObj,targetObj,outdir,decimpath,VTK):
     dpath=os.path.join(outdir,decimatedFile)
     tmpfile=os.path.join(outdir,'tmp.vtk')
     
-    shutil.copy(os.path.join(deformdir,datasetFile),os.path.join(outdir,datasetFile))
+    shutil.copy(os.path.join(deformDir,datasetFile),os.path.join(outdir,datasetFile))
  
-    model=open(os.path.join(deformdir,modelFile)).read()
+    model=open(os.path.join(deformDir,modelFile)).read()
     model=model.replace('%1',str(dataSigma))
     model=model.replace('%2',str(kernelWidthSub))
     model=model.replace('%3',str(kernelType))
@@ -260,7 +261,7 @@ def registerSubjectToTarget(subjectObj,targetObj,outdir,decimpath,VTK):
     with open(os.path.join(outdir,modelFile),'w') as o:
         o.write(model)
         
-    optim=open(os.path.join(deformdir,optimFile)).read()
+    optim=open(os.path.join(deformDir,optimFile)).read()
     optim=optim.replace('%1',str(stepSize))
     
     with open(os.path.join(outdir,optimFile),'w') as o:
@@ -577,7 +578,7 @@ def generateRegionField(obj,landmarkObj,regions,task=None):
         task.setMaxProgress(len(regions))
 
     for rindex,region in enumerate(regions):
-        eidolon.printFlush(rindex,len(regions),region)
+        eidolon.printFlush('Region',rindex,len(regions),region)
         assignRegion(region,rindex,filledregions,landmarks,linemap,graph)   
         if task:
             task.setProgress(rindex+1)
@@ -644,6 +645,8 @@ def calculateGradientDirs(graph,gradientField):
 def calculateDirectionField(obj,landmarkObj,regions,regtype,tempdir,VTK):
     _,lmlines,allregions,lmstim,lmground=loadArchitecture(architecture,regtype)
     
+    regions=regions or list(range(len(allregions)))
+    
     ds=obj.datasets[0]
     nodes=ds.getNodes()
     tris=first(ind for ind in ds.enumIndexSets() if ind.m()==3 and bool(ind.meta(StdProps._isspatial)))
@@ -676,39 +679,61 @@ def calculateDirectionField(obj,landmarkObj,regions,regtype,tempdir,VTK):
         return nodeinds
     
     for r in regions:
-        rfile=os.path.join(tempdir,'region%.2i.mesh'%r)
-        ofile=os.path.join(tempdir,'region%.2i.vtk'%r)
-        pfile=os.path.join(tempdir,'region%.2i.py'%r)
-        newnodes,newtris,nodemap,trimap=extractTriRegion(nodes,tris,lambda i:r in regionfield[i,:2])
+        eidolon.printFlush('Region',r,lmstim[r],lmground[r])
         
-        assert len(newtris)>0, 'Empty region selected'
-        
-        stimnodes=collectNodes(nodemap,trimap,lmstim[r])
-        groundnodes=collectNodes(nodemap,trimap,lmground[r])
-        
-        # convert triangles to tets
-        for t in range(len(newtris)):
-            a,b,c=[newnodes[i] for i in newtris[t]]
-            norm=a.planeNorm(b,c)
-            newtris[t].append(len(newnodes))
-            newnodes.append(avg((a,b,c))+norm)
-        
-        nodegroup=[1 if n in stimnodes else 2 if n in groundnodes else 0 for n in range(len(newnodes))]
-        writeMeshFile(rfile,newnodes,newtris,nodegroup,None,3)
-        
-        with open(problemFile) as p:
-            with open(pfile,'w') as o:
-                o.write(p.read()%{'inputfile':rfile,'outdir':tempdir})
+        try:
+            rfile=os.path.join(tempdir,'region%.2i.mesh'%r)
+            lfile=os.path.join(tempdir,'region%.2i.log'%r)
+            ofile=os.path.join(tempdir,'region%.2i.vtk'%r)
+            pfile=os.path.join(tempdir,'region%.2i.py'%r)
+            newnodes,newtris,nodemap,trimap=extractTriRegion(nodes,tris,lambda i:r in regionfield[i,:2])
             
-        p=ProblemConf.from_file(pfile)
-        solve_pde(p)
-        
-        robj=VTK.loadObject(ofile)
-        gfield=robj.datasets[0].getDataField('t')
-        
-        for oldn,newn in nodemap.items():
-            gradientfield[oldn,0]=gfield[newn]
-    
+            assert len(newtris)>0, 'Empty region selected'
+            
+            stimnodes=collectNodes(nodemap,trimap,lmstim[r])
+            groundnodes=collectNodes(nodemap,trimap,lmground[r])
+            
+            if len(stimnodes)==0:
+                raise ValueError('Region %i has no stim nodes'%r)
+            elif not all(0<=s<len(newnodes) for s in stimnodes):
+                raise ValueError('Region %i has invalid stim nodes: %r'%(r,stimnodes))
+            
+            if len(groundnodes)==0:
+                raise ValueError('Region %i has no ground nodes'%r)    
+            elif not all(0<=s<len(newnodes) for s in groundnodes):
+                raise ValueError('Region %i has invalid ground nodes: %r'%(r,groundnodes))
+            
+            # convert triangles to tets
+            for t in range(len(newtris)):
+                a,b,c=[newnodes[i] for i in newtris[t]]
+                norm=a.planeNorm(b,c)
+                newtris[t].append(len(newnodes))
+                newnodes.append(avg((a,b,c))+norm)
+            
+            nodegroup=[1 if n in stimnodes else (2 if n in groundnodes else 0) for n in range(len(newnodes))]
+            
+            assert 1 in nodegroup, 'Region %i does not assign stim nodes (%r)'%(r,stimnodes)
+            assert 2 in nodegroup, 'Region %i does not assign ground nodes (%r)'%(r,groundnodes)
+            
+            writeMeshFile(rfile,newnodes,newtris,nodegroup,None,3)
+            
+            with open(problemFile) as p:
+                with open(pfile,'w') as o:
+                    o.write(p.read()%{'inputfile':rfile,'outdir':tempdir})
+                
+            p=ProblemConf.from_file(pfile)
+            output.set_output(lfile,True,True)
+            solve_pde(p)
+            
+            robj=VTK.loadObject(ofile)
+            gfield=robj.datasets[0].getDataField('t')
+            
+            for oldn,newn in nodemap.items():
+                gradientfield[oldn,0]=gfield[newn]
+                
+        except Exception as e:
+            eidolon.printFlush(e)
+            
 ### Project objects
 
 class AtrialFibrePropWidget(ui.QtWidgets.QWidget,ui.Ui_AtrialFibre):
@@ -879,8 +904,9 @@ class AtrialFibreProject(Project):
             tempdir=self.createTempDir('dirs') 
             endopoints=self.getProjectObj('endonodes')
             epipoints=self.getProjectObj('epinodes')
+            regions=[]
             
-            result=self.AtrialFibre.generateMesh(endomesh,epimesh,endopoints,epipoints,tempdir)
+            result=self.AtrialFibre.generateMesh(endomesh,epimesh,endopoints,epipoints,tempdir,regions)
             self.mgr.checkFutureResult(result)
 #            self.mgr.addSceneObjectTask(result)
 
@@ -900,8 +926,8 @@ class AtrialFibrePlugin(ScenePlugin):
             self.win.addMenuItem('Project','AtrialFibreProj'+str(plugid),'&Atrial Fibre Project',self._newProjDialog)
             
         # extract the deformetrica zip file if not present
-        if not os.path.isdir(deformdir):
-            z=zipfile.ZipFile(deformdir+'.zip')
+        if not os.path.isdir(deformDir):
+            z=zipfile.ZipFile(deformDir+'.zip')
             z.extractall(scriptdir)
             os.chmod(deformExe,stat.S_IRUSR|stat.S_IXUSR|stat.S_IWUSR)
             
@@ -941,8 +967,8 @@ class AtrialFibrePlugin(ScenePlugin):
         mesh.datasets[0].setDataField(filledregions)
         
     @eidolon.taskmethod('Generating mesh')  
-    def generateMesh(self,endomesh,epimesh,endopoints,epipoints,outdir,task=None):
-        calculateDirectionField(endomesh,endopoints,[5],regTypes._endo,outdir,self.VTK)
+    def generateMesh(self,endomesh,epimesh,endopoints,epipoints,outdir,regions=[],task=None):
+        calculateDirectionField(endomesh,endopoints,regions,regTypes._endo,outdir,self.VTK)
 
 ### Add the project
 
