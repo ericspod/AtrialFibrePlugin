@@ -216,7 +216,7 @@ def loadArchitecture(path,section):
     return landmarks,lmlines,allregions,lmstim,lmground
     
 
-def writeMeshFile(filename,nodes,tris,nodegroup,trigroup,dim):
+def writeMeshFile(filename,nodes,inds,nodegroup,indgroup,dim):
     with open(filename,'w') as o:
         print('MeshVersionFormatted 1',file=o)
         print('Dimension %i'%dim,file=o)
@@ -231,12 +231,12 @@ def writeMeshFile(filename,nodes,tris,nodegroup,trigroup,dim):
             
             print(group,file=o)
             
-        print('Triangles' if len(tris[0])==3 else 'Tetrahedra',file=o)
-        print(len(tris),file=o)
+        print('Triangles' if len(inds[0])==3 else 'Tetrahedra',file=o)
+        print(len(inds),file=o)
         
-        for n in range(len(tris)):
-            print(*['%10i'%(t+1) for t in tris[n]],file=o,end=' ')
-            group=0 if trigroup is None else trigroup[n]
+        for n in range(len(inds)):
+            print(*['%10i'%(t+1) for t in inds[n]],file=o,end=' ')
+            group=0 if indgroup is None else indgroup[n]
             
             print(group,file=o)
 
@@ -375,14 +375,17 @@ def generateNodeElemMap(numnodes,tris):
     return nodemap
     
 
-def generateEdgeMap(numnodes,tris):
-    '''Returns a list relating each node index to the set of node indices joined to it by graph edges.'''
+def generateSimplexEdgeMap(numnodes,simplices):
+    '''
+    Returns a list relating each node index to the set of node indices joined to it by graph edges. This assumes the mesh
+    has `numnodes' number of nodes and simplex topology `simplices'.
+    '''
     nodemap=[set() for _ in range(numnodes)]
 
-    for a,b,c in tris:
-        nodemap[a].update([b,c])
-        nodemap[b].update([a,c])
-        nodemap[c].update([a,b])
+    for simplex in simplices:
+        simplex=set(simplex)
+        for s in simplex:
+            nodemap[s].update(simplex.difference((s,)))
             
     return nodemap
     
@@ -615,30 +618,26 @@ def extractTriRegion(nodes,tris,acceptFunc):
     return newnodes,newtris,nodemap,trimap
 
 
-def calculateGradientDirs(graph,gradientField):
+def calculateGradientDirs(nodes,edges,gradientField):
     '''
     Returns a RealMatrix object containing the vector field for each node of `graph' pointing in the gradient direction
     for the given field RealMatrix object `gradientField'.
     '''
-    def directionalDeriv(grad,edgevec):
-        '''Calculates the derivative in the direction of the edge `edgevec' with gradient value `grad'.'''
-        edgelen=edgevec.len()
-        return (edgevec/edgelen)*(grad/edgelen)
-
-    numnodes=len(graph.nodes)
+    numnodes=len(nodes)
     nodedirs=eidolon.RealMatrix('dirs',numnodes,3)
-    
-    #https://math.stackexchange.com/questions/2627946/how-to-approximate-numerically-the-gradient-of-the-function-on-a-triangular-mesh
     
     for n in range(numnodes):
         ngrad=gradientField[n]
-        nnode=graph.nodes[n]
-        edgegrads=[gradientField[i]-ngrad for i in graph.edges[n]]
-        edgedirs=[graph.nodes[i]-nnode for i in graph.edges[n]]
+        nnode=nodes[n]
+        edgegrads=[gradientField[i]-ngrad for i in edges[n]] # field gradient in edge directions
+        edgedirs=[list(nodes[i]-nnode) for i in edges[n]] # edge directional vectors
         
-        nodedirs[n]=sum(starmap(directionalDeriv, zip(edgegrads,edgedirs)),vec3()).norm()
-        
+        # node direction is solution for x in Ax=b where A is edge directions and b edge gradients
+        nodedir=np.linalg.lstsq(np.asarray(edgedirs),np.asarray(edgegrads),rcond=None)
+        nodedirs[n]=vec3(*nodedir[0]).norm()
+    
     return nodedirs
+    
     
 
 @timing
