@@ -623,6 +623,8 @@ def calculateGradientDirs(nodes,edges,gradientField):
     Returns a RealMatrix object containing the vector field for each node of `graph' pointing in the gradient direction
     for the given field RealMatrix object `gradientField'.
     '''
+    #https://math.stackexchange.com/questions/2627946/how-to-approximate-numerically-the-gradient-of-the-function-on-a-triangular-mesh/2632616#2632616
+    
     numnodes=len(nodes)
     nodedirs=eidolon.RealMatrix('dirs',numnodes,3)
     

@@ -4,7 +4,7 @@ from AtrialFibrePlugin import writeMeshFile,problemFile, calculateGradientDirs, 
 from sfepy.base.conf import ProblemConf
 from sfepy.applications import solve_pde
 
-w,h,d=8,8,16
+w,h,d=16,16,32
 nodes,inds=generateHexBox(w-2,h-2,d-2)
 
 # twist cube around origin in XZ plane
@@ -22,6 +22,7 @@ for hexind in inds:
 field=[0]*len(nodes)
 field[:w*h]=[1]*(w*h) # bottom boundary condition nodes
 field[-w*h:]=[2]*(w*h) # top boundary condition nodes
+#field[-int(w*h*4.6)]=2 # test single embedded boundary node
 
 #ds=PyDataSet('boxDS',nodes,[('inds',ElemType._Tet1NL,tinds)],[('field',field,'inds')])
 #obj=MeshSceneObject('box',ds)    
@@ -51,7 +52,9 @@ mgr.addSceneObjectRepr(rep)
 #
 #rep.applyMaterial('Rainbow',field='t')
 
-rep=obj.createRepr(ReprType._glyph,0,externalOnly=False,drawInternal=True,glyphname='arrow',dfield='dirs',vecfunc=VecFunc._Linear,glyphscale=(0.02,0.02,0.08))
+rep=obj.createRepr(ReprType._glyph,0,externalOnly=False,drawInternal=True,glyphname='arrow',
+                   dfield='dirs',vecfunc=VecFunc._Linear,glyphscale=(0.01,0.01,0.03))
+
 mgr.addSceneObjectRepr(rep)
 rep.applyMaterial('Rainbow',field='t')
 
