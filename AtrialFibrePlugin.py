@@ -142,19 +142,38 @@ class plane(object):
         
         
 class TriMeshGraph(object):
-    def __init__(self,nodes,tris):
-        self.nodes=nodes
-        self.tris=tris
-        self.tricenters=[avg(nodes.mapIndexRow(tris,r),vec3()) for r in range(tris.n())]
-        self.adj=generateTriAdj(tris) # elem -> elems
-        self.nodeelem=generateNodeElemMap(nodes.n(),tris) # node -> elems
-        self.edges=generateEdgeMap(nodes.n(),tris) # node -> nodes
+    def __init__(self,nodes,tris,ocdepth=3):
+        self.nodes=nodes if isinstance(nodes,eidolon.Vec3Matrix) else eidolon.listToMatrix(nodes,'nodes')
+        self.tris=tris if isinstance(tris,eidolon.IndexMatrix) else eidolon.listToMatrix(tris,'tris')
+        
+        self.tricenters=[avg(self.getTriNodes(r),vec3()) for r in range(self.tris.n())]
+        self.adj=generateTriAdj(self.tris) # elem -> elems
+        self.nodeelem=generateNodeElemMap(self.nodes.n(),self.tris) # node -> elems
+        self.edges=generateSimplexEdgeMap(self.nodes.n(),self.tris) # node -> nodes
+        self.boundbox=eidolon.BoundBox(nodes)
+        self.octree=eidolon.Octree(ocdepth,self.boundbox.getDimensions(),self.boundbox.center)
+        
+        self.octree.addMesh(self.nodes,self.tris)
         
         def computeDist(key):
             i,j=key
             return self.tricenters[i].distTo(self.tricenters[j])
             
         self.tridists=initdict(computeDist)
+        
+    def getIntersectedTri(self,start,end):
+        startoc=self.octree.getLeaf(start)
+        endoc=self.octree.getLeaf(end)
+        inds=(startoc.leafdata if startoc is not None else []) + (endoc.leafdata if endoc is not None else []) 
+        
+        r=eidolon.Ray(start,end-start)
+        
+        for tri in inds:
+            d=r.intersectsTri(*self.getTriNodes(tri))
+            if d:
+                return tri
+            
+        return None
         
     def getPathSubgraph(self,starttri,endtri):
         return getAdjTo(self.adj,starttri,endtri)
@@ -173,7 +192,6 @@ class TriMeshGraph(object):
             
         tris.remove(triindex)
         return list(sorted(tris))
-#        return listSum([self.nodeelem[n] for n in self.tris[triindex]])
         
     def getPath(self,starttri,endtri,acceptTri=None):
         return dijkstra(self.adj,starttri,endtri,lambda i,j:self.tridists[(i,j)],acceptTri)
