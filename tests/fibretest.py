@@ -71,11 +71,18 @@ dirs=calculateGradientDirs(ds.getNodes(),generateSimplexEdgeMap(ds.getNodes().n(
 ds.setDataField(dirs)
 
 
-def findSurfaceTris(nodes,inds,vecLength,surfaceGraph,nodeDirections,gradField,outField):
+def findSurfaceTris(nodes,inds,vecLength,surfaceGraph,fieldLines):
+    '''
+    Given a mesh defined by nodes `nodes' and tet indices `inds', with `surfaceGraph' representing the surfaces of the
+    mesh with defined directions (ie. inner and outer surfaces), return a map relating nodes to indices stating which
+    triangles the node's field lines pass through and where. The field lines are defined by the `fieldLines' field which
+    stores a vector for each node of `node's indicating the field direction at that point. 
+    '''
     numnodes=len(nodes)
     oc=Octree.fromMesh(2,nodes,inds)
     
     def getDirection(pos):
+        '''Get the field line direction at the position `pos' somewhere in the mesh. Returns None if not in the mesh.'''
         leaf=oc.getLeaf(pos)
         
         if leaf is None:
@@ -84,13 +91,19 @@ def findSurfaceTris(nodes,inds,vecLength,surfaceGraph,nodeDirections,gradField,o
         for i in leaf.leafdata:
             elem=nodes.mapIndexRow(inds,i)
             xi=pointSearchLinTet(pos,*elem)
+            
+            # pos is in element i
             if xi.isInUnitCube() and sum(xi)<=1.0:
-                elemdirs=[nodeDirections[d] for d in inds[i]]
+                elemdirs=[fieldLines[d] for d in inds[i]]
                 return ElemType.Tet1NL.applyBasis(elemdirs,*xi)
             
         return None
     
     def followFieldLine(start,startdir,veclen):
+        '''
+        Follow the field lines starting at `start' with direction `startdir', advancing by a vector of length `veclen'.
+        Returns a (triangle,(t,u,v)) pair once a surface triangle has been intersected, None otherwise.
+        '''
         end=start+vec3(*startdir)*veclen
         tri=surfaceGraph.getIntersectedTri(start,end)
             
@@ -105,27 +118,37 @@ def findSurfaceTris(nodes,inds,vecLength,surfaceGraph,nodeDirections,gradField,o
             
         return tri
         
-    def getTriSurfaceDir(tri,u,v):
-        v0,v1,v2=[outField[t] for t in surfaceGraph.tris[tri]]
-        return vec3(*v0)*(1-u-v)+vec3(*v1)*u+vec3(*v2)*v
+    nodemap={}
     
     for node in range(numnodes):
-        outdir=outField[node]
-        if vec3(*outdir).isZero():
-            ptri=followFieldLine(nodes[node],nodeDirections[node],vecLength)
-            ntri=followFieldLine(nodes[node],nodeDirections[node],-vecLength)
-            
-            if ptri is not None and ntri is not None:
-                #outField[node]=(ptri,ntri,0)
-                d1=getTriSurfaceDir(ptri[0],ptri[1][1],ptri[1][2])
-                d2=getTriSurfaceDir(ntri[0],ntri[1][1],ntri[1][2])
-                g=gradField[node]
+        ptri=followFieldLine(nodes[node],fieldLines[node],vecLength)
+        ntri=followFieldLine(nodes[node],fieldLines[node],-vecLength)
+        
+        if ptri is not None and ntri is not None:
+            nodemap[node]=(ptri,ntri)
                 
-                outField[node]=d1*g+d2*(1-g)
-                
+    return nodemap
     
 
-findSurfaceTris(ds.getNodes(),ds.getIndexSet('inds'),0.1,surfacegraph,dirs,grad,ds.getDataField('directionalField'))
+def interpolateNodeDirections(nodemap,surfaceGraph,gradField,directionField):
+    def getTriSurfaceDir(tri,u,v):
+        v0,v1,v2=[directionField[t] for t in surfaceGraph.tris[tri]]
+        return vec3(*v0)*(1-u-v)+vec3(*v1)*u+vec3(*v2)*v
+    
+    for node,(ptri,ntri) in nodemap.items():
+        if True:# vec3(*directionalField[node]).isZero(): # skip nodes with assigned directions (ie. on the surfaces)
+            d1=getTriSurfaceDir(ptri[0],ptri[1][1],ptri[1][2])
+            d2=getTriSurfaceDir(ntri[0],ntri[1][1],ntri[1][2])
+            g=gradField[node]
+            
+            directionField[node]=d1*g+d2*(1-g)
+
+
+nodemap=findSurfaceTris(ds.getNodes(),ds.getIndexSet('inds'),0.1,surfacegraph,dirs)
+
+interpolateNodeDirections(nodemap,surfacegraph,grad,ds.getDataField('directionalField'))
+
+
 
 rep=obj.createRepr(ReprType._line,0)
 mgr.addSceneObjectRepr(rep)
