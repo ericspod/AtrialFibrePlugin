@@ -136,7 +136,7 @@ def interpolateNodeDirections(nodemap,surfaceGraph,gradField,directionField):
         return vec3(*v0)*(1-u-v)+vec3(*v1)*u+vec3(*v2)*v
     
     for node,(ptri,ntri) in nodemap.items():
-        if True:# vec3(*directionalField[node]).isZero(): # skip nodes with assigned directions (ie. on the surfaces)
+        if vec3(*directionalField[node]).isZero(): # skip nodes with assigned directions (ie. on the surfaces)
             d1=getTriSurfaceDir(ptri[0],ptri[1][1],ptri[1][2])
             d2=getTriSurfaceDir(ntri[0],ntri[1][1],ntri[1][2])
             g=gradField[node]
