@@ -75,6 +75,7 @@ stepSize=0.000001
 regionField='regions'
 landmarkField='landmarks'
 directionField='directions'
+gradientDirField='gradientDirs'
 
 objNames=eidolon.enum(
     'atlasmesh',
@@ -162,6 +163,10 @@ class TriMeshGraph(object):
         self.tridists=initdict(computeDist)
         
     def getIntersectedTri(self,start,end):
+        '''
+        Returns the triangle index and the (t,u,v) triple if the line from `start' to `end' intersects the indexed triangle 
+        at a distance of `t' from `start' with xi coord (u,v). Returns None if no triangle intersected.
+        '''
         startoc=self.octree.getLeaf(start)
         endoc=self.octree.getLeaf(end)
         inds=(startoc.leafdata if startoc is not None else []) + (endoc.leafdata if endoc is not None else []) 
@@ -170,8 +175,8 @@ class TriMeshGraph(object):
         
         for tri in inds:
             d=r.intersectsTri(*self.getTriNodes(tri))
-            if d:
-                return tri
+            if d and d[0]<=start.distTo(end):
+                return tri,d
             
         return None
         
@@ -644,7 +649,7 @@ def calculateGradientDirs(nodes,edges,gradientField):
     #https://math.stackexchange.com/questions/2627946/how-to-approximate-numerically-the-gradient-of-the-function-on-a-triangular-mesh/2632616#2632616
     
     numnodes=len(nodes)
-    nodedirs=eidolon.RealMatrix('dirs',numnodes,3)
+    nodedirs=eidolon.RealMatrix(gradientDirField,numnodes,3)
     
     for n in range(numnodes):
         ngrad=gradientField[n]
