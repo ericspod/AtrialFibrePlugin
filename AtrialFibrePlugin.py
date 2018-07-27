@@ -175,7 +175,7 @@ class TriMeshGraph(object):
         
         for tri in inds:
             d=r.intersectsTri(*self.getTriNodes(tri))
-            if d and d[0]<=start.distTo(end):
+            if d:# and d[0]<=start.distTo(end):
                 return tri,d
             
         return None
@@ -197,6 +197,17 @@ class TriMeshGraph(object):
             
         tris.remove(triindex)
         return list(sorted(tris))
+    
+    def getNearestTri(self,node):
+        def triDist(tri):
+            norm=self.getTriNorm(tri)
+            pt=self.tricenters[tri]
+            return node.planeDist(pt,norm)
+        
+        nearestnode=min([n for n in range(self.nodes.n()) if self.nodeelem[n]],key=lambda n:self.nodes[n].distToSq(node))
+        tris=self.nodeelem[nearestnode]
+        
+        return min(tris,key=triDist)
         
     def getPath(self,starttri,endtri,acceptTri=None):
         return dijkstra(self.adj,starttri,endtri,lambda i,j:self.tridists[(i,j)],acceptTri)
@@ -655,11 +666,13 @@ def calculateGradientDirs(nodes,edges,gradientField):
         ngrad=gradientField[n]
         nnode=nodes[n]
         edgegrads=[gradientField[i]-ngrad for i in edges[n]] # field gradient in edge directions
-        edgedirs=[list(nodes[i]-nnode) for i in edges[n]] # edge directional vectors
+        edgedirs=[nodes[i]-nnode for i in edges[n]] # edge directional vectors
+        minlen=min(e.lenSq() for e in edgedirs)**0.5
+        edgedirs=[list(e) for e in edgedirs]
         
         # node direction is solution for x in Ax=b where A is edge directions and b edge gradients
         nodedir=np.linalg.lstsq(np.asarray(edgedirs),np.asarray(edgegrads),rcond=None)
-        nodedirs[n]=vec3(*nodedir[0]).norm()
+        nodedirs[n]=vec3(*nodedir[0]).norm()*minlen
     
     return nodedirs
     
