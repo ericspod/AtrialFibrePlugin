@@ -79,14 +79,14 @@ ds=PyDataSet('boxDS',nodes,[('inds',ElemType._Tet1NL,tinds)],fields)
 obj=MeshSceneObject('box',ds)    
 mgr.addSceneObject(obj)
 
-writeMeshFile('test.mesh',nodes,tinds,boundaryfield,None,3)
-
-with open(problemFile) as p:
-    with open('prob.py','w') as o:
-        o.write(p.read()%{'inputfile':'test.mesh','outdir':'.'})
-        
-p=ProblemConf.from_file('prob.py')
-solve_pde(p)
+#writeMeshFile('test.mesh',nodes,tinds,boundaryfield,None,3)
+#
+#with open(problemFile) as p:
+#    with open('prob.py','w') as o:
+#        o.write(p.read()%{'inputfile':'test.mesh','outdir':'.'})
+#        
+#p=ProblemConf.from_file('prob.py')
+#solve_pde(p)
 
 outobj=VTK.loadObject('test.vtk')
 grad=outobj.datasets[0].getDataField('t')
@@ -108,25 +108,44 @@ def getElemDirectionAdj(nodes,elems,dirField,adj=None):
         adj=ds.getIndexSet(elems.getName()+MatrixType.adj[1])
         
     et=ElemType[elems.getType()]
-    result=IndexMatrix('diradj',elems.n(),2)
+    result=IndexMatrix('diradj',elems.n(),4)
     result.meta(StdProps._elemdata,'True')
     result.fill(elems.n())
     
-    for e,elem in enumerate(elems):
-        edir=vec3(*dirField[e])
-        enodes=[nodes[n] for n in elem] # elem nodes
-        center=et.applyBasis(enodes,0.33333,0.33333,0.33333) # elem center
-#        dist=max(center.distTo(n) for n in enodes)
-#        edir=edir.norm()*dist # elem direction, definitely intersects face
-        
-        dray=Ray(center,edir)
+    def getFaceInDirection(start,direction,enodes):
+        dray=Ray(start,direction)
         
         for f,face in enumerate(et.faces):
             fnodes=[enodes[i] for i in face[:3]]
             if dray.intersectsTri(*fnodes):
-                result[e,0]=f
-                result[e,1]=adj[e,f]
-                break
+                return f
+            
+        return None
+    
+    
+    for e,elem in enumerate(elems):
+        edir=vec3(*dirField[e])
+        enodes=[nodes[n] for n in elem] # elem nodes
+        center=et.applyBasis(enodes,0.25,0.25,0.25) # elem center
+#        dist=max(center.distTo(n) for n in enodes)
+#        edir=edir.norm()*dist # elem direction, definitely intersects face
+        
+#        dray=Ray(center,edir)
+#        
+#        for f,face in enumerate(et.faces):
+#            fnodes=[enodes[i] for i in face[:3]]
+#            if dray.intersectsTri(*fnodes):
+#                result[e,0]=f
+#                result[e,1]=adj[e,f]
+#                break
+            
+        forward=getFaceInDirection(center,edir,enodes)
+        result[e,0]=forward
+        result[e,1]=adj[e,forward]
+        
+        backward=getFaceInDirection(center,-edir,enodes)
+        result[e,2]=backward
+        result[e,3]=adj[e,backward]
             
         assert result[e,0]<elems.n()
         
@@ -140,43 +159,71 @@ def getElemDirectionAdj(nodes,elems,dirField,adj=None):
 
 def followElemDirAdj(nodes,elems,elemdiradj):
 #    et=ElemType[elems.getType()]
-    result=IndexMatrix('diradj',elems.n(),2)
+    result=IndexMatrix('diradj',elems.n(),4)
     result.meta(StdProps._elemdata,'True')
     
-    for e in range(elems.n()):
-        curelem=e
+    def followElem(start,isForward):
+        curelem=start
+        index=1 if isForward else 3
         
-        while elemdiradj[curelem,1]<elems.n():
-            curelem=elemdiradj[curelem,1]
+        while elemdiradj[curelem,index]<elems.n():
+            curelem=elemdiradj[curelem,index]
             
-        result[e]=(curelem,elemdiradj[curelem,0])
+        return curelem
+    
+    for e in range(elems.n()):
+#        curelem=e
+#        while elemdiradj[curelem,1]<elems.n():
+#            curelem=elemdiradj[curelem,1]
+           
+        forward=followElem(e,True)
+        result[e,0]=forward
+        result[e,1]=elemdiradj[forward,0]
         
+        backward=followElem(e,False)
+        result[e,2]=backward
+        result[e,3]=elemdiradj[backward,2]
     return result
 
 
-def interpolateElemDirections(elems,elemFollow,gradField,dirField,directionalField):
+def interpolateElemDirections(elems,elemFollow,gradField,directionalField):
     et=ElemType[elems.getType()]
     elemdirField=RealMatrix('elemdirField',elems.n(),3)
     elemdirField.meta(StdProps._elemdata,'True')
     elemdirField.fill(0)
     
-    for e,elem in enumerate(elems):
-        endelem,endface=elemFollow[e]
-        #faceinds=et.faces[endface]
+    def getDirectionalFaceValue(elem,face):
+        endinds=elems[elem]
+        faceinds=[endinds[f] for f in et.faces[face]]
+        return avg(vec3(*directionalField[f]) for f in faceinds).norm()
+    
+    for e in range(elems.n()):
+#        endelem,endface=elemFollow[e]
+#        endinds=elems[endelem]
+#        faceinds=[endinds[f] for f in et.faces[endface]]
+#        
+##        assert all(elem[f] in topnodes for f in faceinds)
+#        
+#        enddir=avg(vec3(*directionalField[f]) for f in faceinds).norm()
+##        enddir=dirField[endelem]
+#        elemdirField[e]=tuple(enddir)
         
-        #assert all(elem[f] in topnodes for f in faceinds)
+        elem1,face1,elem2,face2=elemFollow[e]
         
-#        enddir=avg(vec3(*directionalField[elem[f]]) for f in faceinds).norm()
-        enddir=dirField[endelem]
-        elemdirField[e]=[endface]*3 #tuple(enddir)
+        dir1=getDirectionalFaceValue(elem1,face1)
+        dir2=getDirectionalFaceValue(elem2,face2)
+        grad=avg(gradField[i] for i in elems[e])
+        
+        elemdirField[e]=tuple(dir1*grad+dir2*(1-grad))
+        
         
     return elemdirField
         
 
 elemdiradj=getElemDirectionAdj(ds.getNodes(),ds.getIndexSet('inds'),dirs)
-elemFollow=elemdiradj#followElemDirAdj(ds.getNodes(),ds.getIndexSet('inds'),elemdiradj)
+elemFollow=followElemDirAdj(ds.getNodes(),ds.getIndexSet('inds'),elemdiradj)
 
-elemDirField=interpolateElemDirections(ds.getIndexSet('inds'),elemFollow,grad,dirs,directionalField)
+elemDirField=interpolateElemDirections(ds.getIndexSet('inds'),elemFollow,grad,directionalField)
 #elemDirField=convertElemToNodeField(elemDirField,ds.getNodes().n(),ds.getIndexSet('inds'))
 elemDirField.meta(StdProps._spatial,'inds')
 elemDirField.meta(StdProps._topology,'inds')
@@ -287,10 +334,9 @@ rep=elemobj.createRepr(ReprType._glyph,0,externalOnly=False,drawInternal=True,gl
                    dfield=elemDirField.getName(),vecfunc=VecFunc._Linear,glyphscale=(0.01,0.01,0.03),matname='Rainbow',field=grad.getName())
 
 mgr.addSceneObjectRepr(rep)
-#rep.applyMaterial('Rainbow',field=grad.getName())
 
-rep=obj.createRepr(ReprType._volume,matname='Rainbow',field=elemDirField.getName())
-mgr.addSceneObjectRepr(rep)
+#rep=obj.createRepr(ReprType._volume,matname='Rainbow',field=elemDirField.getName())
+#mgr.addSceneObjectRepr(rep)
 
 mgr.setAxesType(AxesType._originarrows) # top right corner axes
 mgr.controller.setRotation(0.8,0.8)
