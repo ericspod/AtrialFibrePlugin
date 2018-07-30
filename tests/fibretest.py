@@ -122,22 +122,10 @@ def getElemDirectionAdj(nodes,elems,dirField,adj=None):
             
         return None
     
-    
     for e,elem in enumerate(elems):
         edir=vec3(*dirField[e])
         enodes=[nodes[n] for n in elem] # elem nodes
         center=et.applyBasis(enodes,0.25,0.25,0.25) # elem center
-#        dist=max(center.distTo(n) for n in enodes)
-#        edir=edir.norm()*dist # elem direction, definitely intersects face
-        
-#        dray=Ray(center,edir)
-#        
-#        for f,face in enumerate(et.faces):
-#            fnodes=[enodes[i] for i in face[:3]]
-#            if dray.intersectsTri(*fnodes):
-#                result[e,0]=f
-#                result[e,1]=adj[e,f]
-#                break
             
         forward=getFaceInDirection(center,edir,enodes)
         result[e,0]=forward
@@ -149,33 +137,27 @@ def getElemDirectionAdj(nodes,elems,dirField,adj=None):
             
         assert result[e,0]<elems.n()
         
-#        norms=[enodes[f[0]].planeNorm(enodes[f[1]],enodes[f[2]]) for f in et.faces]
-#        minangleface=min(range(len(norms)),key=lambda i:norms[i].angleTo(edir))
-#        result[e,0]=minangleface
-#        result[e,1]=adj[e,minangleface]
-        
     return result
         
 
-def followElemDirAdj(nodes,elems,elemdiradj):
-#    et=ElemType[elems.getType()]
-    result=IndexMatrix('diradj',elems.n(),4)
+def followElemDirAdj(elemdiradj):
+    result=IndexMatrix('diradj',elemdiradj.n(),4)
+    result.fill(elemdiradj.n())
     result.meta(StdProps._elemdata,'True')
     
     def followElem(start,isForward):
         curelem=start
         index=1 if isForward else 3
         
-        while elemdiradj[curelem,index]<elems.n():
+        while curelem>=start and elemdiradj[curelem,index]<elemdiradj.n():
             curelem=elemdiradj[curelem,index]
             
-        return curelem
+        if curelem<start: # previously assigned value, use this since the path from here on is the same
+            return result[curelem,index-1]
+        else:
+            return curelem
     
-    for e in range(elems.n()):
-#        curelem=e
-#        while elemdiradj[curelem,1]<elems.n():
-#            curelem=elemdiradj[curelem,1]
-           
+    for e in range(elemdiradj.n()):
         forward=followElem(e,True)
         result[e,0]=forward
         result[e,1]=elemdiradj[forward,0]
@@ -183,6 +165,7 @@ def followElemDirAdj(nodes,elems,elemdiradj):
         backward=followElem(e,False)
         result[e,2]=backward
         result[e,3]=elemdiradj[backward,2]
+        
     return result
 
 
@@ -198,16 +181,6 @@ def interpolateElemDirections(elems,elemFollow,gradField,directionalField):
         return avg(vec3(*directionalField[f]) for f in faceinds).norm()
     
     for e in range(elems.n()):
-#        endelem,endface=elemFollow[e]
-#        endinds=elems[endelem]
-#        faceinds=[endinds[f] for f in et.faces[endface]]
-#        
-##        assert all(elem[f] in topnodes for f in faceinds)
-#        
-#        enddir=avg(vec3(*directionalField[f]) for f in faceinds).norm()
-##        enddir=dirField[endelem]
-#        elemdirField[e]=tuple(enddir)
-        
         elem1,face1,elem2,face2=elemFollow[e]
         
         dir1=getDirectionalFaceValue(elem1,face1)
@@ -221,104 +194,13 @@ def interpolateElemDirections(elems,elemFollow,gradField,directionalField):
         
 
 elemdiradj=getElemDirectionAdj(ds.getNodes(),ds.getIndexSet('inds'),dirs)
-elemFollow=followElemDirAdj(ds.getNodes(),ds.getIndexSet('inds'),elemdiradj)
+elemFollow=followElemDirAdj(elemdiradj)
 
 elemDirField=interpolateElemDirections(ds.getIndexSet('inds'),elemFollow,grad,directionalField)
 #elemDirField=convertElemToNodeField(elemDirField,ds.getNodes().n(),ds.getIndexSet('inds'))
 elemDirField.meta(StdProps._spatial,'inds')
 elemDirField.meta(StdProps._topology,'inds')
 ds.setDataField(elemDirField)
-
-#def findSurfaceTris(nodes,inds,vecLength,surfaceGraph,fieldLines):
-#    '''
-#    Given a mesh defined by nodes `nodes' and tet indices `inds', with `surfaceGraph' representing the surfaces of the
-#    mesh with defined directions (ie. inner and outer surfaces), return a map relating nodes to indices stating which
-#    triangles the node's field lines pass through and where. The field lines are defined by the `fieldLines' field which
-#    stores a vector for each node of `node's indicating the field direction at that point. 
-#    '''
-#    numnodes=len(nodes)
-#    oc=Octree.fromMesh(2,nodes,inds)
-#    
-#    def getDirection(pos):
-#        '''Get the field line direction at the position `pos' somewhere in the mesh. Returns None if not in the mesh.'''
-#        leaf=oc.getLeaf(pos)
-#        
-#        if leaf is None:
-#            return None
-#        
-#        for i in leaf.leafdata:
-#            elem=nodes.mapIndexRow(inds,i)
-#            xi=pointSearchLinTet(pos,*elem)
-#            
-#            # pos is in element i
-#            if xi.isInUnitCube() and sum(xi)<=1.0:
-#                elemdirs=[fieldLines[d] for d in inds[i]]
-#                return ElemType.Tet1NL.applyBasis(elemdirs,*xi)
-#            
-#        return None
-#    
-#    def followFieldLine(start,startdir,veclen):
-#        '''
-#        Follow the field lines starting at `start' with direction `startdir', advancing by a vector of length `veclen'.
-#        Returns a (triangle,(t,u,v)) pair once a surface triangle has been intersected, None otherwise.
-#        '''
-#        pos=start
-#        prev=start
-#        nodedir=getDirection(pos)
-#        
-#        while nodedir is not None:
-#            prev,pos=pos,pos+vec3(*nodedir)*veclen
-#            nodedir=getDirection(pos)
-#            
-#        if pos!=prev:
-#            return surfaceGraph.getIntersectedTri(pos,prev)
-#        
-#        return None
-#                
-##        end=start+vec3(*startdir)*veclen
-##        tri=surfaceGraph.getIntersectedTri(start,end)
-##            
-##        while tri is None:
-##            nodedir=getDirection(end)
-##            if nodedir is None:
-##                break
-##            
-##            start=end
-##            end=start+vec3(*nodedir)*veclen
-##            tri=surfaceGraph.getIntersectedTri(start,end)
-##            
-##        return tri
-#        
-#    nodemap={}
-#    
-#    for node in range(numnodes):
-#        printFlush(node)
-#        ptri=followFieldLine(nodes[node],fieldLines[node],vecLength)
-#        ntri=followFieldLine(nodes[node],fieldLines[node],-vecLength)
-#        
-#        if ptri is not None and ntri is not None:
-#            nodemap[node]=(ptri,ntri)
-#                
-#    return nodemap
-#    
-#
-#def interpolateNodeDirections(nodemap,surfaceGraph,gradField,directionField):
-#    def getTriSurfaceDir(tri,u,v):
-#        v0,v1,v2=[directionField[t] for t in surfaceGraph.tris[tri]]
-#        return vec3(*v0)*(1-u-v)+vec3(*v1)*u+vec3(*v2)*v
-#    
-#    for node,(ptri,ntri) in nodemap.items():
-#        if vec3(*directionalField[node]).isZero(): # skip nodes with assigned directions (ie. on the surfaces)
-#            d1=getTriSurfaceDir(ptri[0],ptri[1][1],ptri[1][2])
-#            d2=getTriSurfaceDir(ntri[0],ntri[1][1],ntri[1][2])
-#            g=gradField[node]
-#            
-#            directionField[node]=d1*g+d2*(1-g)
-#
-#
-#nodemap=findSurfaceTris(ds.getNodes(),ds.getIndexSet('inds'),1.0,surfacegraph,dirs)
-#
-#interpolateNodeDirections(nodemap,surfacegraph,grad,ds.getDataField('directionalField'))
 
 
 rep=obj.createRepr(ReprType._line,0)
@@ -330,8 +212,8 @@ elemnodes=[ElemType.Tet1NL.applyCoeffs([nodes[e] for e in elem],mid) for elem in
 elemobj=MeshSceneObject('elemobj',PyDataSet('elemobjds',elemnodes,[],[elemDirField,dirs,convertNodeToElemField(grad,ds.getIndexSet('inds'))]))
 mgr.addSceneObject(elemobj)
 
-rep=elemobj.createRepr(ReprType._glyph,0,externalOnly=False,drawInternal=True,glyphname='arrow',
-                   dfield=elemDirField.getName(),vecfunc=VecFunc._Linear,glyphscale=(0.01,0.01,0.03),matname='Rainbow',field=grad.getName())
+rep=elemobj.createRepr(ReprType._glyph,0,externalOnly=False,drawInternal=True,glyphname='arrow',glyphscale=(0.01,0.01,0.03),
+                   dfield=elemDirField.getName(),vecfunc=VecFunc._Linear,matname='Rainbow',field=grad.getName())
 
 mgr.addSceneObjectRepr(rep)
 
