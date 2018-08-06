@@ -79,14 +79,14 @@ ds=PyDataSet('boxDS',nodes,[('inds',ElemType._Tet1NL,tinds)],fields)
 obj=MeshSceneObject('box',ds)    
 mgr.addSceneObject(obj)
 
-#writeMeshFile('test.mesh',nodes,tinds,boundaryfield,None,3)
-#
-#with open(problemFile) as p:
-#    with open('prob.py','w') as o:
-#        o.write(p.read()%{'inputfile':'test.mesh','outdir':'.'})
-#        
-#p=ProblemConf.from_file('prob.py')
-#solve_pde(p)
+writeMeshFile('test.mesh',nodes,tinds,boundaryfield,None,3)
+
+with open(problemFile) as p:
+    with open('prob.py','w') as o:
+        o.write(p.read()%{'inputfile':'test.mesh','outdir':'.'})
+        
+p=ProblemConf.from_file('prob.py')
+solve_pde(p)
 
 outobj=VTK.loadObject('test.vtk')
 grad=outobj.datasets[0].getDataField('t')

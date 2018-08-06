@@ -234,6 +234,8 @@ def loadArchitecture(path,section):
     ground=ast.literal_eval(c.get(section,'ground')) # per region
 #    types=ast.literal_eval(c.get('endo','type')) # per region    
     
+    # indices that don't exist are for landmarks that need to be calculated
+    
     lmlines=[subone(l) for l in lines if max(l)<=len(landmarks)] # filter for lines with existing node indices
     lmregions=[subone(r) for r in regions]
 #    lmregions=[subone(r) for r in regions if all(i<=len(landmarks) for i in r)]
