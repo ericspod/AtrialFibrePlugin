@@ -41,7 +41,10 @@ try:
 except ImportError:
     warnings.warn('SfePy needs to be installed or in PYTHONPATH to generate fiber directions.')
 
-from eidolon import ScenePlugin, Project, avg, vec3, successive, first, RealMatrix, IndexMatrix, StdProps, timing
+from eidolon import (
+        ScenePlugin, Project, avg, vec3, successive, first, RealMatrix, IndexMatrix, StdProps, timing,
+        listToMatrix,MeshSceneObject, BoundBox, ElemType, reduceMesh, PyDataSet, taskmethod, taskroutine
+        )
 import eidolon, ui
 
 import numpy as np
@@ -79,6 +82,7 @@ gradientDirField='gradientDirs'
 
 objNames=eidolon.enum(
     'atlasmesh',
+    'origmesh',
     'epimesh','epinodes',
     'endomesh','endonodes',
     'architecture'
@@ -94,7 +98,7 @@ ui.loadUI(open(uifile).read())
 def showLines(nodes,lines,name='Lines',matname='Default'):
     mgr=eidolon.getSceneMgr()
     lineds=eidolon.LineDataSet(name+'DS',nodes,lines)
-    obj=eidolon.MeshSceneObject(name,lineds)
+    obj=MeshSceneObject(name,lineds)
     mgr.addSceneObject(obj)
     
     rep=obj.createRepr(eidolon.ReprType._line,matname=matname)
@@ -144,14 +148,14 @@ class plane(object):
         
 class TriMeshGraph(object):
     def __init__(self,nodes,tris,ocdepth=3):
-        self.nodes=nodes if isinstance(nodes,eidolon.Vec3Matrix) else eidolon.listToMatrix(nodes,'nodes')
-        self.tris=tris if isinstance(tris,eidolon.IndexMatrix) else eidolon.listToMatrix(tris,'tris')
+        self.nodes=nodes if isinstance(nodes,eidolon.Vec3Matrix) else listToMatrix(nodes,'nodes')
+        self.tris=tris if isinstance(tris,eidolon.IndexMatrix) else listToMatrix(tris,'tris')
         
         self.tricenters=[avg(self.getTriNodes(r),vec3()) for r in range(self.tris.n())]
-        self.adj=generateTriAdj(self.tris) # elem -> elems
+        self.adj,self.ragged=generateTriAdj(self.tris) # elem -> elems
         self.nodeelem=generateNodeElemMap(self.nodes.n(),self.tris) # node -> elems
         self.edges=generateSimplexEdgeMap(self.nodes.n(),self.tris) # node -> nodes
-        self.boundbox=eidolon.BoundBox(nodes)
+        self.boundbox=BoundBox(nodes)
         self.octree=eidolon.Octree(ocdepth,self.boundbox.getDimensions(),self.boundbox.center)
         
         self.octree.addMesh(self.nodes,self.tris)
@@ -198,13 +202,13 @@ class TriMeshGraph(object):
         tris.remove(triindex)
         return list(sorted(tris))
     
-    def getNearestTri(self,node):
+    def getNearestTri(self,pt):
         def triDist(tri):
             norm=self.getTriNorm(tri)
             pt=self.tricenters[tri]
-            return node.planeDist(pt,norm)
+            return abs(pt.planeDist(pt,norm))
         
-        nearestnode=min([n for n in range(self.nodes.n()) if self.nodeelem[n]],key=lambda n:self.nodes[n].distToSq(node))
+        nearestnode=min([n for n in range(self.nodes.n()) if self.nodeelem[n]],key=lambda n:self.nodes[n].distToSq(pt))
         tris=self.nodeelem[nearestnode]
         
         return min(tris,key=triDist)
@@ -302,9 +306,16 @@ def registerSubjectToTarget(subjectObj,targetObj,outdir,decimpath,VTK):
     
     with open(os.path.join(outdir,optimFile),'w') as o:
         o.write(optim)
+        
+    # if the target has a representation, apply that representation's transform to the target mesh when saving
+    if targetObj.reprs:
+        trans=targetObj.reprs[0].getTransform()
+        vecfunc=lambda i: i*trans
+    else:
+        vecfunc=None
 
     VTK.saveLegacyFile(tmpfile,subjectObj,datasettype='POLYDATA')
-    VTK.saveLegacyFile(os.path.join(outdir,targetFile),targetObj,datasettype='POLYDATA')
+    VTK.saveLegacyFile(os.path.join(outdir,targetFile),targetObj,datasettype='POLYDATA',vecfunc=vecfunc)
         
     snodes=subjectObj.datasets[0].getNodes()
     tnodes=targetObj.datasets[0].getNodes()
@@ -361,8 +372,9 @@ def transferLandmarks(archFilename,fieldname,sourceObj,subjectObj,outdir,VTK):
 
 def generateTriAdj(tris):
     '''
-    Generates a table (n,3) giving the indices of adjacent triangles for each triangle, with n indicating a free edge.
-    The indices in each row are in order rather than per triangle edge. The result is the dual of the triangle mesh.
+    Generates a table (n,3) giving the indices of adjacent triangles for each triangle, with a value of `n' indicating a 
+    free edge. The indices in each row are in sorted order rather than per triangle edge. The result is the dual of the 
+    triangle mesh represented as the (n,3) array and a map relating the mesh's ragged edges to their triangle.
     '''
     edgemap = {} # maps edges to the first triangle having that edge
     result=IndexMatrix(tris.getName()+'Adj',tris.n(),3)
@@ -381,19 +393,22 @@ def generateTriAdj(tris):
             else:
                 edgemap[k]=t1 # first time edge is encountered, associate this triangle with it
 
-    return result
+    return result,edgemap
 
 
 @timing
 def getAdjTo(adj,start,end):
-    '''Returns a subgraph of `adj',represented as a node->[neighbours] dict, which includes nodes `start' and `end'.'''
+    '''
+    Returns a subgraph of `adj',represented as a node->[neighbours] dict, which includes nodes `start' and `end'. 
+    If `end' is None or an index not appearing in the mesh, the result will be the submesh contiguous with `start'.
+    '''
     visiting=set([start])
     found={}
     numnodes=adj.n()
     
-    while end not in found:
+    while visiting and end not in found:
         visit=visiting.pop()
-        neighbours=[n for n in adj.getRow(visit) if n<numnodes]
+        neighbours=[n for n in adj[visit] if n<numnodes]
         found[visit]=neighbours
         visiting.update(n for n in neighbours if n not in found)
                 
@@ -473,9 +488,13 @@ def subone(v):
     return tuple(i-1 for i in v)
     
 
-def findNearestIndex(node,nodelist):
-    return min(range(len(nodelist)),key=lambda i:node.distToSq(nodelist[i]))
+def findNearestIndex(pt,nodelist):
+    return min(range(len(nodelist)),key=lambda i:pt.distToSq(nodelist[i]))
         
+
+def findFarthestIndex(pt,nodelist):
+    return max(range(len(nodelist)),key=lambda i:pt.distToSq(nodelist[i]))
+
 
 def getContiguousTris(graph,starttri,acceptTri):
     accepted=[starttri]
@@ -817,8 +836,11 @@ class AtrialFibreProject(Project):
                 self.configMap[name]=str(combo.itemText(i))
                 
         setConfigMap(self.afprop.atlasBox,objNames._atlasmesh)
+        setConfigMap(self.afprop.origBox,objNames._origmesh)
         setConfigMap(self.afprop.endoBox,objNames._endomesh)
         setConfigMap(self.afprop.epiBox,objNames._epimesh)
+        
+        self.afprop.importShellButton.clicked.connect(self._importShell)
         
         self.afprop.endoReg.clicked.connect(lambda:self._registerLandmarks(objNames._endomesh,regTypes._endo))
         self.afprop.endoDiv.clicked.connect(lambda:self._divideRegions(objNames._endomesh,regTypes._endo))
@@ -839,10 +861,11 @@ class AtrialFibreProject(Project):
 
         names=sorted(o.getName() for o in scenemeshes)
         eidolon.fillList(self.afprop.atlasBox,names,self.configMap.get(objNames._atlasmesh,-1))
+        eidolon.fillList(self.afprop.origBox,names,self.configMap.get(objNames._origmesh,-1))
         eidolon.fillList(self.afprop.endoBox,names,self.configMap.get(objNames._endomesh,-1))
         eidolon.fillList(self.afprop.epiBox,names,self.configMap.get(objNames._epimesh,-1))
         
-    @eidolon.taskmethod('Adding Object to Project')
+    @taskmethod('Adding Object to Project')
     def checkIncludeObject(self,obj,task):
         '''Check whether the given object should be added to the project or not.'''
 
@@ -872,6 +895,20 @@ class AtrialFibreProject(Project):
         path=self.getProjectFile(prefix+datetime.datetime.now().strftime('%Y%m%d%H%M%S'))
         os.mkdir(path)
         return path
+    
+    def _importShell(self):
+        filename=self.mgr.win.chooseFileDialog('Choose Endo/Epi Shell filename',filterstr='VTK Files (*.vtk *.vtu *.vtp)')
+        if filename:
+            f=self.AtrialFibre.importShell(filename)
+            self.mgr.checkFutureResult(f)
+            
+            @taskroutine('Add meshes')
+            def _add(task):
+                endo,epi=f()
+                self.addMesh(endo)
+                self.addMesh(epi)
+                
+            self.mgr.runTasks(_add())
             
     def _registerLandmarks(self,meshname,regtype):
         atlas=self.getProjectObj(self.configMap.get(objNames._atlasmesh,''))
@@ -885,14 +922,14 @@ class AtrialFibreProject(Project):
         if endo is not None:
             self.mgr.removeSceneObject(endo)
             
-#        tempdir=self.createTempDir('reg') 
-        tempdir=self.getProjectFile('reg20180530193140') # TODO: for testing
+        tempdir=self.createTempDir('reg') 
+#        tempdir=self.getProjectFile('reg20180530193140') # TODO: for testing
             
         result=self.AtrialFibre.registerLandmarks(subj,atlas,regtype,tempdir)
         
         self.mgr.checkFutureResult(result)
         
-        @eidolon.taskroutine('Add points')
+        @taskroutine('Add points')
         def _add(task):
             obj=eidolon.Future.get(result)
             obj.setName(regtype+'nodes')
@@ -914,7 +951,7 @@ class AtrialFibreProject(Project):
         
         self.mgr.checkFutureResult(result)
         
-        @eidolon.taskroutine('Save mesh')
+        @taskroutine('Save mesh')
         def _save(task):
             self.VTK.saveObject(mesh,mesh.getObjFiles()[0])
             
@@ -985,8 +1022,33 @@ class AtrialFibrePlugin(ScenePlugin):
     def createProject(self,name,parentdir):
         if self.project==None:
             self.mgr.createProjectObj(name,parentdir,AtrialFibreProject)
+            
+    @taskmethod('Import endo/epi shell')
+    def importShell(self,filename,task=None):
+        shells=self.VTK.loadObject(filename)
+        ds=shells.datasets[0]
+        nodes=ds.getNodes()
+        tris=first(ds.enumIndexSets())
+        adj,_=generateTriAdj(tris)
+        
+        center=avg(nodes) #BoundBox(nodes).center
+        
+        findex=findFarthestIndex(center,nodes)
+        
+        outerinds=getAdjTo(adj,findex,None)
+        outertris=listToMatrix([tris[i] for i in outerinds],'tris',ElemType._Tri1NL)
+        innertris=listToMatrix([tris[i] for i in range(tris.n()) if i not in outerinds],'tris',ElemType._Tri1NL)
+        
+        outermesh=reduceMesh(nodes,[outertris])
+        innermesh=reduceMesh(nodes,[innertris])
+        
+        # TODO: not reliably telling inner from outer shell, until that's better use ambiguous mesh names and have user choose
+        outer=MeshSceneObject('shell1',PyDataSet('ds',outermesh[0],outermesh[1]))
+        inner=MeshSceneObject('shell2',PyDataSet('ds',innermesh[0],innermesh[1]))
 
-    @eidolon.taskmethod('Registering landmarks')
+        return inner,outer
+
+    @taskmethod('Registering landmarks')
     def registerLandmarks(self,meshObj,atlasObj,regtype,outdir,task=None):
         output=registerSubjectToTarget(meshObj,atlasObj,outdir,self.decimate,self.VTK)
         eidolon.printFlush(output)
@@ -998,14 +1060,14 @@ class AtrialFibrePlugin(ScenePlugin):
         
         return eidolon.MeshSceneObject('LM',ptds)
     
-    @eidolon.taskmethod('Dividing mesh into regions')
+    @taskmethod('Dividing mesh into regions')
     def divideRegions(self,mesh,points,regtype,task=None):
         lmlines,lmregions=loadArchitecture(architecture,regtype)[1:3]
         
         filledregions,linemap=generateRegionField(mesh,points,lmregions,task)
         mesh.datasets[0].setDataField(filledregions)
         
-    @eidolon.taskmethod('Generating mesh')  
+    @taskmethod('Generating mesh')  
     def generateMesh(self,endomesh,epimesh,endopoints,epipoints,outdir,regions=[],task=None):
         calculateDirectionField(endomesh,endopoints,regions,regTypes._endo,outdir,self.VTK)
 
