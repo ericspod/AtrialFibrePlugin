@@ -49,14 +49,14 @@ import eidolon, ui
 
 import numpy as np
 
-scriptdir= os.path.dirname(os.path.abspath(__file__)) # this file's directory
+plugindir= os.path.dirname(os.path.abspath(__file__)) # this file's directory
 
 # directory/file names
-uifile=os.path.join(scriptdir,'AtrialFibrePlugin.ui') 
-deformDir=os.path.join(scriptdir,'deformetricaC')
+uifile=os.path.join(plugindir,'AtrialFibrePlugin.ui') 
+deformDir=os.path.join(plugindir,'deformetricaC')
 deformExe=os.path.join(deformDir,'deformetrica')
-architecture=os.path.join(scriptdir,'architecture.ini') 
-problemFile=os.path.join(scriptdir,'problemfile.py') 
+architecture=os.path.join(plugindir,'architecture.ini') 
+problemFile=os.path.join(plugindir,'problemfile.py') 
 
 # registration file names
 decimatedFile='subject.vtk'
@@ -310,7 +310,7 @@ def registerSubjectToTarget(subjectObj,targetObj,outdir,decimpath,VTK):
     # if the target has a representation, apply that representation's transform to the target mesh when saving
     if targetObj.reprs:
         trans=targetObj.reprs[0].getTransform()
-        vecfunc=lambda i: i*trans
+        vecfunc=lambda i: tuple(trans*i)
     else:
         vecfunc=None
 
@@ -423,6 +423,8 @@ def generateNodeElemMap(numnodes,tris):
         for n in tri:
             nodemap[n].add(i)
             
+    assert all(len(s)>0 for s in nodemap), 'Unused nodes in triangle topology'
+            
     return nodemap
     
 
@@ -518,8 +520,14 @@ def findTrisBetweenNodes(start,end,landmarks,graph):
     start=landmarks[start]
     end=landmarks[end]
 
+    assert 0<=start<len(graph.nodeelem)
+    assert 0<=end<len(graph.nodeelem)
+
     starttri=first(graph.nodeelem[start])
     endtri=first(graph.nodeelem[end])
+    
+    assert starttri is not None
+    assert endtri is not None
     
     nodes=graph.nodes
     startnode=nodes[start]
@@ -625,6 +633,8 @@ def generateRegionField(obj,landmarkObj,regions,task=None):
     linemap={}
     
     landmarks=[nodes.indexOf(lm)[0] for lm in lmnodes]
+    
+    assert all(0<=l<nodes.n() for l in landmarks)
     
     graph=TriMeshGraph(nodes,tris)
     
@@ -1039,8 +1049,14 @@ class AtrialFibrePlugin(ScenePlugin):
         outertris=listToMatrix([tris[i] for i in outerinds],'tris',ElemType._Tri1NL)
         innertris=listToMatrix([tris[i] for i in range(tris.n()) if i not in outerinds],'tris',ElemType._Tri1NL)
         
-        outermesh=reduceMesh(nodes,[outertris])
-        innermesh=reduceMesh(nodes,[innertris])
+        assert outertris.n()>0
+        assert innertris.n()>0
+        
+        outermesh=reduceMesh(nodes,[outertris],marginSq=1e-1)
+        innermesh=reduceMesh(nodes,[innertris],marginSq=1e-1)
+        
+        generateNodeElemMap(outermesh[0].n(),outermesh[1][0])
+        generateNodeElemMap(innermesh[0].n(),innermesh[1][0])
         
         # TODO: not reliably telling inner from outer shell, until that's better use ambiguous mesh names and have user choose
         outer=MeshSceneObject('shell1',PyDataSet('ds',outermesh[0],outermesh[1]))
