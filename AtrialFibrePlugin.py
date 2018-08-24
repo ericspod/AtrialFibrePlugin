@@ -285,16 +285,20 @@ def writeMeshFile(filename,nodes,inds,nodegroup,indgroup,dim):
             print(group,file=o)
 
 
-def registerSubjectToTarget(subjectObj,targetObj,outdir,decimpath,VTK):
+def registerSubjectToTarget(subjectObj,targetObj,targetTrans,outdir,decimpath,VTK):
     '''
     Register the `subjectObj' mesh object to `targetObj' mesh object putting data into directory `outdir'. The subject 
     will be decimated to have roughly the same number of nodes as the target and then stored as subject.vtk in `outdir'. 
     Registration is done with Deformetrica and result stored as 'Registration_subject_to_subject_0__t_9.vtk' in `outdir'.
+    If `targetTrans' must be None or a transform which is applied to the nodes of `targetObj' before registration.
     '''
     dpath=os.path.join(outdir,decimatedFile)
     tmpfile=os.path.join(outdir,'tmp.vtk')
     
-    shutil.copy(os.path.join(deformDir,datasetFile),os.path.join(outdir,datasetFile))
+    # if a transform is given, apply that transform to the target mesh when saving otherwise do no transformation
+    vecfunc=(lambda i: tuple(targetTrans*i)) if targetTrans else None
+
+    shutil.copy(os.path.join(deformDir,datasetFile),os.path.join(outdir,datasetFile)) # copy dataset file unchanged
  
     model=open(os.path.join(deformDir,modelFile)).read()
     model=model.replace('%1',str(dataSigma))
@@ -302,21 +306,14 @@ def registerSubjectToTarget(subjectObj,targetObj,outdir,decimpath,VTK):
     model=model.replace('%3',str(kernelType))
     model=model.replace('%4',str(kernelWidthDef))
 
-    with open(os.path.join(outdir,modelFile),'w') as o:
+    with open(os.path.join(outdir,modelFile),'w') as o: # save modified model file
         o.write(model)
         
     optim=open(os.path.join(deformDir,optimFile)).read()
     optim=optim.replace('%1',str(stepSize))
     
-    with open(os.path.join(outdir,optimFile),'w') as o:
+    with open(os.path.join(outdir,optimFile),'w') as o: # save modified optimization file
         o.write(optim)
-        
-    # if the target has a representation, apply that representation's transform to the target mesh when saving
-    if targetObj.reprs:
-        trans=targetObj.reprs[0].getTransform()
-        vecfunc=lambda i: tuple(trans*i)
-    else:
-        vecfunc=None
 
     VTK.saveLegacyFile(tmpfile,subjectObj,datasettype='POLYDATA')
     VTK.saveLegacyFile(os.path.join(outdir,targetFile),targetObj,datasettype='POLYDATA',vecfunc=vecfunc)
@@ -337,11 +334,11 @@ def registerSubjectToTarget(subjectObj,targetObj,outdir,decimpath,VTK):
     return output
 
 
-def transferLandmarks(archFilename,fieldname,sourceObj,subjectObj,outdir,VTK):
+def transferLandmarks(archFilename,fieldname,targetObj,targetTrans,subjectObj,outdir,VTK):
     '''
-    Register the landmarks defined as node indices on `sourceObj' to equivalent node indices on `subjectObj' via the
+    Register the landmarks defined as node indices on `targetObj' to equivalent node indices on `subjectObj' via the
     decimated and registered intermediary stored in `outdir'. The result is a list of index pairs associating a node
-    index in `subjectObj' for every landmark index in `sourceObj'.
+    index in `subjectObj' for every landmark index in `targetObj'.
     '''
     decimated=os.path.join(outdir,decimatedFile)
     registered=os.path.join(outdir,registeredFile)
@@ -351,27 +348,29 @@ def transferLandmarks(archFilename,fieldname,sourceObj,subjectObj,outdir,VTK):
     reg=VTK.loadObject(registered) # mesh registered to target
     dec=VTK.loadObject(decimated) # decimated unregistered mesh
     
-    tnodes=sourceObj.datasets[0].getNodes() # target points
+    tnodes=targetObj.datasets[0].getNodes() # target points
     rnodes=reg.datasets[0].getNodes() # registered decimated points
     dnodes=dec.datasets[0].getNodes() # unregistered decimated points
     snodes=subjectObj.datasets[0].getNodes() # original subject points
     
-    lmpoints=[(tnodes[m],m) for m in lmarks]
+    targetTrans=targetTrans or eidolon.transform()
+    lmpoints=[(targetTrans*tnodes[m],m) for m in lmarks] # (transformed landmark node, index) pairs
     
     # TODO: use scipy.spatial.cKDTree?
-    def getNearestPointIndex(pt,nodes):
-        '''Find the index in `nodes' whose vector is closest to `pt'.'''
-        return min(range(len(nodes)),key=lambda i:pt.distToSq(nodes[i]))
+#    def getNearestPointIndex(pt,nodes):
+#        '''Find the index in `nodes' whose vector is closest to `pt'.'''
+#        return min(range(len(nodes)),key=lambda i:pt.distToSq(nodes[i]))
     
-    rpoints=[(getNearestPointIndex(pt,rnodes),m) for pt,m in lmpoints]
+    # find the points in the registered mesh closest to the landmark points in the target object
+    rpoints=[(findNearestIndex(pt,rnodes),m) for pt,m in lmpoints] 
     
-    spoints=[(getNearestPointIndex(dnodes[i],snodes),m) for i,m in rpoints]
+    # find the subject nodes closes to landmark points in the decimated mesh (which at the same indices as the registered mesh)
+    spoints=[(findNearestIndex(dnodes[i],snodes),m) for i,m in rpoints]
         
     assert len(spoints)==len(lmpoints)
     assert all(p[0] is not None for p in spoints)
     
-    
-    return spoints
+    return spoints # return list (i,m) pairs where node index i in the subject mesh is landmark m
 
 
 def generateTriAdj(tris):
@@ -1101,10 +1100,15 @@ class AtrialFibrePlugin(ScenePlugin):
 
     @taskmethod('Registering landmarks')
     def registerLandmarks(self,meshObj,atlasObj,regtype,outdir,task=None):
-        output=registerSubjectToTarget(meshObj,atlasObj,outdir,self.decimate,self.VTK)
+        if atlasObj.reprs:
+            atlasTrans=atlasObj.reprs[0].getTransform()
+        else:
+            atlasTrans=None
+        
+        output=registerSubjectToTarget(meshObj,atlasObj,atlasTrans,outdir,self.decimate,self.VTK)
         eidolon.printFlush(output)
         
-        points=transferLandmarks(architecture,regtype,atlasObj,meshObj,outdir,self.VTK)
+        points=transferLandmarks(architecture,regtype,atlasObj,atlasTrans,meshObj,outdir,self.VTK)
         
         subjnodes=meshObj.datasets[0].getNodes()
         ptds=eidolon.PyDataSet('pts',[subjnodes[n[0]] for n in points],[('landmarkField','',points)])
