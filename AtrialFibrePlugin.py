@@ -223,10 +223,12 @@ def loadArchitecture(path,section):
     return value is a tuple containing:
         landmarks: 0-based indices of landmark nodes in the atlas
         lmlines  : 0-based index pairs defining lines between indices in landmarks
-        lmregions: a list of maps each defining a retion, which are mappings from a 0-based index into lmlines to the 
+        lmregions: a list of maps each defining a region, which are mappings from a 0-based index into lmlines to the 
                    line's landmark index pair
         lmstim   : a per-region specifier list stating which lines (L# for index #) or atlas node (N#) defines stimulation
         lground  : a per-region specifier list stating which lines (L# for index #) or atlas node (N#) defines ground
+        appendageregion: region number for the appendage
+        appendagenode: node index for the appendage's division node which must be generated
     '''
     c=configparser.SafeConfigParser()
     assert len(c.read(path))>0
@@ -236,16 +238,18 @@ def loadArchitecture(path,section):
     regions=ast.literal_eval(c.get(section,'regions')) # 1-based landmark indices
     stimulus=ast.literal_eval(c.get(section,'stimulus')) # per region
     ground=ast.literal_eval(c.get(section,'ground')) # per region
-#    types=ast.literal_eval(c.get('endo','type')) # per region    
+    appendageregion=ast.literal_eval(c.get(section,'appendageregion'))
+    appendagenode=ast.literal_eval(c.get(section,'appendagenode'))
+#    types=ast.literal_eval(c.get(section,'type')) # per region    
     
     # indices that don't exist are for landmarks that need to be calculated
     
-    lmlines=[subone(l) for l in lines if max(l)<=len(landmarks)] # filter for lines with existing node indices
+    lmlines=[subone(l) for l in lines ]#if max(l)<=len(landmarks)] # filter for lines with existing node indices
     lmregions=[subone(r) for r in regions]
 #    lmregions=[subone(r) for r in regions if all(i<=len(landmarks) for i in r)]
     
-    lmstim=stimulus[:len(lmregions)]
-    lmground=ground[:len(lmregions)]
+    lmstim=stimulus#[:len(lmregions)]
+    lmground=ground#[:len(lmregions)]
     
     allregions=[]
     for r in lmregions:
@@ -253,7 +257,7 @@ def loadArchitecture(path,section):
         if len(lr)>2:
             allregions.append(lr)
 
-    return landmarks,lmlines,allregions,lmstim,lmground
+    return landmarks,lmlines,allregions,lmstim,lmground, appendageregion,appendagenode
     
 
 def writeMeshFile(filename,nodes,inds,nodegroup,indgroup,dim):
@@ -453,6 +457,8 @@ def dijkstra(adj, start, end,distFunc,acceptTri=None):
     # consider only subgraph containing start and end, this expands geometrically so should contain the minimal path
     adj=getAdjTo(adj,start,end) 
     
+    eidolon.printFlush(len(adj))
+    
     if acceptTri is not None:
         accept=lambda a: (a in adj and acceptTri(a))
     else:
@@ -517,6 +523,7 @@ def getContiguousTris(graph,starttri,acceptTri):
 
 @timing
 def findTrisBetweenNodes(start,end,landmarks,graph):
+    eidolon.printFlush('Nodes:',start,end)
     start=landmarks[start]
     end=landmarks[end]
 
@@ -625,32 +632,60 @@ def assignRegion(region,index,assignmat,landmarks,linemap,graph):
     
     
 @timing
-def generateRegionField(obj,landmarkObj,regions,task=None):
+def generateRegionField(obj,landmarkObj,regions,appendageregion,appendagenode,task=None):
     ds=obj.datasets[0]
     nodes=ds.getNodes()
     tris=first(ind for ind in ds.enumIndexSets() if ind.m()==3 and bool(ind.meta(StdProps._isspatial)))
     lmnodes=landmarkObj.datasets[0].getNodes()
     linemap={}
     
-    landmarks=[nodes.indexOf(lm)[0] for lm in lmnodes]
+    landmarks={i:nodes.indexOf(lm)[0] for i,lm in enumerate(lmnodes)}
     
     assert all(0<=l<nodes.n() for l in landmarks)
     
     graph=TriMeshGraph(nodes,tris)
     
+    edgenodeinds=set(eidolon.listSum(graph.ragged)) # list of all node indices on the ragged edge
+    
     filledregions=RealMatrix(regionField,tris.n(),3)
     filledregions.meta(StdProps._elemdata,'True')
     filledregions.fill(-10)
+    
+    
+    #landmarks[appendagenode]=0 # TODO: skipping appendage node for now
+    
+#    for region in regions:
+#        for a,b in region.values():
+#            if appendagenode not in (a,b):
+#                if a in landmarks and b not in landmarks:
+#                    oldlmnode=nodes[a]
+#                    newlm=b
+#                elif b in landmarks and a not in landmarks:
+#                    oldlmnode=nodes[b]
+#                    newlm=a
+#                else:
+#                    continue
+#                
+#                newlmnode=min(edgenodeinds.difference({a,b}),key=lambda i:nodes[i].distToSq(oldlmnode)) # ragged edge node closest to landmark
+#                landmarks[newlm]=newlmnode
+##                eidolon.printFlush(newlm,newlmnode,graph.getPath(min(a,b),newlmnode),'\n')
+#                
     
     if task:
         task.setMaxProgress(len(regions))
 
     for rindex,region in enumerate(regions):
-        eidolon.printFlush('Region',rindex,len(regions),region)
-        assignRegion(region,rindex,filledregions,landmarks,linemap,graph)   
+        eidolon.printFlush('Region',rindex,'of',len(regions),region)
+        
+        allnodes=set(eidolon.listSum(region.values()))
+        if all(a in landmarks for a in allnodes):
+            assignRegion(region,rindex,filledregions,landmarks,linemap,graph)   
+        else:
+            eidolon.printFlush('Skipping',rindex,[a for a in allnodes if a not in landmarks])
+            
         if task:
             task.setProgress(rindex+1)
-        
+            
     return filledregions,linemap
 
 
@@ -711,7 +746,7 @@ def calculateGradientDirs(nodes,edges,gradientField):
 
 @timing
 def calculateDirectionField(obj,landmarkObj,regions,regtype,tempdir,VTK):
-    _,lmlines,allregions,lmstim,lmground=loadArchitecture(architecture,regtype)
+    _,lmlines,allregions,lmstim,lmground,_,_=loadArchitecture(architecture,regtype)
     
     regions=regions or list(range(len(allregions)))
     
@@ -1014,7 +1049,7 @@ class AtrialFibrePlugin(ScenePlugin):
         # extract the deformetrica zip file if not present
         if not os.path.isdir(deformDir):
             z=zipfile.ZipFile(deformDir+'.zip')
-            z.extractall(scriptdir)
+            z.extractall(plugindir)
             os.chmod(deformExe,stat.S_IRUSR|stat.S_IXUSR|stat.S_IWUSR)
             
         self.mirtkdir=os.path.join(eidolon.getAppDir(),eidolon.LIBSDIR,'MIRTK','Linux')
@@ -1078,9 +1113,9 @@ class AtrialFibrePlugin(ScenePlugin):
     
     @taskmethod('Dividing mesh into regions')
     def divideRegions(self,mesh,points,regtype,task=None):
-        lmlines,lmregions=loadArchitecture(architecture,regtype)[1:3]
+        _,_,lmregions,_,_,appendageregion,appendagenode=loadArchitecture(architecture,regtype)
         
-        filledregions,linemap=generateRegionField(mesh,points,lmregions,task)
+        filledregions,linemap=generateRegionField(mesh,points,lmregions,appendageregion,appendagenode,task)
         mesh.datasets[0].setDataField(filledregions)
         
     @taskmethod('Generating mesh')  
