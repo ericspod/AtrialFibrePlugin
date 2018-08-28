@@ -1,5 +1,8 @@
 from eidolon import *
-from AtrialFibrePlugin import writeMeshFile,problemFile, calculateGradientDirs, generateSimplexEdgeMap, TriMeshGraph, generateNodeElemMap
+from AtrialFibrePlugin import (
+        writeMeshFile,problemFile, calculateGradientDirs, generateSimplexEdgeMap, TriMeshGraph, generateNodeElemMap,
+        getElemDirectionAdj, followElemDirAdj, interpolateElemDirections
+        )
 
 from sfepy.base.conf import ProblemConf
 from sfepy.applications import solve_pde
@@ -101,96 +104,96 @@ dirs=convertNodeToElemField(dirs,ds.getIndexSet('inds'))
 ds.setDataField(dirs)
 
 
-def getElemDirectionAdj(nodes,elems,dirField,adj=None):
-    if not adj:
-        ds=PyDataSet('tmp',nodes,[elems])
-        calculateElemExtAdj(ds)
-        adj=ds.getIndexSet(elems.getName()+MatrixType.adj[1])
-        
-    et=ElemType[elems.getType()]
-    result=IndexMatrix('diradj',elems.n(),4)
-    result.meta(StdProps._elemdata,'True')
-    result.fill(elems.n())
-    
-    def getFaceInDirection(start,direction,enodes):
-        dray=Ray(start,direction)
-        
-        for f,face in enumerate(et.faces):
-            fnodes=[enodes[i] for i in face[:3]]
-            if dray.intersectsTri(*fnodes):
-                return f
-            
-        return None
-    
-    for e,elem in enumerate(elems):
-        edir=vec3(*dirField[e])
-        enodes=[nodes[n] for n in elem] # elem nodes
-        center=et.applyBasis(enodes,0.25,0.25,0.25) # elem center
-            
-        forward=getFaceInDirection(center,edir,enodes)
-        result[e,0]=forward
-        result[e,1]=adj[e,forward]
-        
-        backward=getFaceInDirection(center,-edir,enodes)
-        result[e,2]=backward
-        result[e,3]=adj[e,backward]
-            
-        assert result[e,0]<elems.n()
-        
-    return result
-        
-
-def followElemDirAdj(elemdiradj):
-    result=IndexMatrix('diradj',elemdiradj.n(),4)
-    result.fill(elemdiradj.n())
-    result.meta(StdProps._elemdata,'True')
-    
-    def followElem(start,isForward):
-        curelem=start
-        index=1 if isForward else 3
-        
-        while curelem>=start and elemdiradj[curelem,index]<elemdiradj.n():
-            curelem=elemdiradj[curelem,index]
-            
-        if curelem<start: # previously assigned value, use this since the path from here on is the same
-            return result[curelem,index-1]
-        else:
-            return curelem
-    
-    for e in range(elemdiradj.n()):
-        forward=followElem(e,True)
-        result[e,0]=forward
-        result[e,1]=elemdiradj[forward,0]
-        
-        backward=followElem(e,False)
-        result[e,2]=backward
-        result[e,3]=elemdiradj[backward,2]
-        
-    return result
-
-
-def interpolateElemDirections(elems,elemFollow,gradField,directionalField):
-    et=ElemType[elems.getType()]
-    elemdirField=RealMatrix('elemdirField',elems.n(),3)
-    elemdirField.meta(StdProps._elemdata,'True')
-    elemdirField.fill(0)
-    
-    def getDirectionalFaceValue(elem,face):
-        endinds=elems[elem]
-        faceinds=[endinds[f] for f in et.faces[face]]
-        return avg(vec3(*directionalField[f]) for f in faceinds).norm()
-    
-    for e in range(elems.n()):
-        elem1,face1,elem2,face2=elemFollow[e]
-        
-        dir1=getDirectionalFaceValue(elem1,face1)
-        dir2=getDirectionalFaceValue(elem2,face2)
-        grad=avg(gradField[i] for i in elems[e])
-        
-        elemdirField[e]=tuple(dir1*grad+dir2*(1-grad))
-        
-        
-    return elemdirField
+#def getElemDirectionAdj(nodes,elems,dirField,adj=None):
+#    if not adj:
+#        ds=PyDataSet('tmp',nodes,[elems])
+#        calculateElemExtAdj(ds)
+#        adj=ds.getIndexSet(elems.getName()+MatrixType.adj[1])
+#        
+#    et=ElemType[elems.getType()]
+#    result=IndexMatrix('diradj',elems.n(),4)
+#    result.meta(StdProps._elemdata,'True')
+#    result.fill(elems.n())
+#    
+#    def getFaceInDirection(start,direction,enodes):
+#        dray=Ray(start,direction)
+#        
+#        for f,face in enumerate(et.faces):
+#            fnodes=[enodes[i] for i in face[:3]]
+#            if dray.intersectsTri(*fnodes):
+#                return f
+#            
+#        return None
+#    
+#    for e,elem in enumerate(elems):
+#        edir=vec3(*dirField[e])
+#        enodes=[nodes[n] for n in elem] # elem nodes
+#        center=et.applyBasis(enodes,0.25,0.25,0.25) # elem center
+#            
+#        forward=getFaceInDirection(center,edir,enodes)
+#        result[e,0]=forward
+#        result[e,1]=adj[e,forward]
+#        
+#        backward=getFaceInDirection(center,-edir,enodes)
+#        result[e,2]=backward
+#        result[e,3]=adj[e,backward]
+#            
+#        assert result[e,0]<elems.n()
+#        
+#    return result
+#        
+#
+#def followElemDirAdj(elemdiradj):
+#    result=IndexMatrix('diradj',elemdiradj.n(),4)
+#    result.fill(elemdiradj.n())
+#    result.meta(StdProps._elemdata,'True')
+#    
+#    def followElem(start,isForward):
+#        curelem=start
+#        index=1 if isForward else 3
+#        
+#        while curelem>=start and elemdiradj[curelem,index]<elemdiradj.n():
+#            curelem=elemdiradj[curelem,index]
+#            
+#        if curelem<start: # previously assigned value, use this since the path from here on is the same
+#            return result[curelem,index-1]
+#        else:
+#            return curelem
+#    
+#    for e in range(elemdiradj.n()):
+#        forward=followElem(e,True)
+#        result[e,0]=forward
+#        result[e,1]=elemdiradj[forward,0]
+#        
+#        backward=followElem(e,False)
+#        result[e,2]=backward
+#        result[e,3]=elemdiradj[backward,2]
+#        
+#    return result
+#
+#
+#def interpolateElemDirections(elems,elemFollow,gradField,directionalField):
+#    et=ElemType[elems.getType()]
+#    elemdirField=RealMatrix('elemdirField',elems.n(),3)
+#    elemdirField.meta(StdProps._elemdata,'True')
+#    elemdirField.fill(0)
+#    
+#    def getDirectionalFaceValue(elem,face):
+#        endinds=elems[elem]
+#        faceinds=[endinds[f] for f in et.faces[face]]
+#        return avg(vec3(*directionalField[f]) for f in faceinds).norm()
+#    
+#    for e in range(elems.n()):
+#        elem1,face1,elem2,face2=elemFollow[e]
+#        
+#        dir1=getDirectionalFaceValue(elem1,face1)
+#        dir2=getDirectionalFaceValue(elem2,face2)
+#        grad=avg(gradField[i] for i in elems[e])
+#        
+#        elemdirField[e]=tuple(dir1*grad+dir2*(1-grad))
+#        
+#        
+#    return elemdirField
         
 
 elemdiradj=getElemDirectionAdj(ds.getNodes(),ds.getIndexSet('inds'),dirs)
