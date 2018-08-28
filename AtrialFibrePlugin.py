@@ -156,9 +156,9 @@ class TriMeshGraph(object):
         self.nodeelem=generateNodeElemMap(self.nodes.n(),self.tris) # node -> elems
         self.edges=generateSimplexEdgeMap(self.nodes.n(),self.tris) # node -> nodes
         self.boundbox=BoundBox(nodes)
-        self.octree=eidolon.Octree(ocdepth,self.boundbox.getDimensions(),self.boundbox.center)
         
-        self.octree.addMesh(self.nodes,self.tris)
+#        self.octree=eidolon.Octree(ocdepth,self.boundbox.getDimensions(),self.boundbox.center)
+#        self.octree.addMesh(self.nodes,self.tris)
         
         def computeDist(key):
             i,j=key
@@ -166,23 +166,23 @@ class TriMeshGraph(object):
             
         self.tridists=initdict(computeDist)
         
-    def getIntersectedTri(self,start,end):
-        '''
-        Returns the triangle index and the (t,u,v) triple if the line from `start' to `end' intersects the indexed triangle 
-        at a distance of `t' from `start' with xi coord (u,v). Returns None if no triangle intersected.
-        '''
-        startoc=self.octree.getLeaf(start)
-        endoc=self.octree.getLeaf(end)
-        inds=(startoc.leafdata if startoc is not None else []) + (endoc.leafdata if endoc is not None else []) 
-        
-        r=eidolon.Ray(start,end-start)
-        
-        for tri in inds:
-            d=r.intersectsTri(*self.getTriNodes(tri))
-            if d:# and d[0]<=start.distTo(end):
-                return tri,d
-            
-        return None
+#    def getIntersectedTri(self,start,end):
+#        '''
+#        Returns the triangle index and the (t,u,v) triple if the line from `start' to `end' intersects the indexed triangle 
+#        at a distance of `t' from `start' with xi coord (u,v). Returns None if no triangle intersected.
+#        '''
+#        startoc=self.octree.getLeaf(start)
+#        endoc=self.octree.getLeaf(end)
+#        inds=(startoc.leafdata if startoc is not None else []) + (endoc.leafdata if endoc is not None else []) 
+#        
+#        r=eidolon.Ray(start,end-start)
+#        
+#        for tri in inds:
+#            d=r.intersectsTri(*self.getTriNodes(tri))
+#            if d:# and d[0]<=start.distTo(end):
+#                return tri,d
+#            
+#        return None
         
     def getPathSubgraph(self,starttri,endtri):
         return getAdjTo(self.adj,starttri,endtri)
@@ -223,8 +223,8 @@ def loadArchitecture(path,section):
     return value is a tuple containing:
         landmarks: 0-based indices of landmark nodes in the atlas
         lmlines  : 0-based index pairs defining lines between indices in landmarks
-        lmregions: a list of maps each defining a region, which are mappings from a 0-based index into lmlines to the 
-                   line's landmark index pair
+        lmregions: a list of maps, each map defining a region which are mappings from a 0-based indices into lmlines to 
+                   the line's landmark index pair
         lmstim   : a per-region specifier list stating which lines (L# for index #) or atlas node (N#) defines stimulation
         lground  : a per-region specifier list stating which lines (L# for index #) or atlas node (N#) defines ground
         appendageregion: region number for the appendage
@@ -575,7 +575,7 @@ def findTrisBetweenNodes(start,end,landmarks,graph):
     
     accepted=getContiguousTris(graph,starttri,lambda i:i in indices)
     
-    if endtri not in accepted:
+    if endtri not in accepted or len(easypath)<len(accepted):
         eidolon.printFlush('---Resorting to easypath')
         accepted=easypath 
         
@@ -612,7 +612,7 @@ def assignRegion(region,index,assignmat,landmarks,linemap,graph):
             
             # assign line ID to triangles on the line
             for tri in line:
-                assignmat[tri,2]=lineindex
+                assignmat[tri,0]=lineindex
             
         bordertris.update(line)
         
@@ -623,11 +623,13 @@ def assignRegion(region,index,assignmat,landmarks,linemap,graph):
     maxgraph=getEnclosedGraph(graph.adj,bordertris,farthest)
     
     for tri in range(len(graph.tris)):
-        if tri not in maxgraph or tri in bordertris:
-            if assignmat[tri,0]<0:
-                assignmat[tri,0]=index
-            elif assignmat[tri,1]<0:
+        if tri in bordertris or tri not in maxgraph:
+            if assignmat[tri,1]<0:
                 assignmat[tri,1]=index
+            elif assignmat[tri,2]<0:
+                assignmat[tri,2]=index
+            elif assignmat[tri,3]<0:
+                assignmat[tri,3]=index
     
     
 @timing
@@ -646,29 +648,34 @@ def generateRegionField(obj,landmarkObj,regions,appendageregion,appendagenode,ta
     
     edgenodeinds=set(eidolon.listSum(graph.ragged)) # list of all node indices on the ragged edge
     
-    filledregions=RealMatrix(regionField,tris.n(),3)
+    filledregions=RealMatrix(regionField,tris.n(),4)
     filledregions.meta(StdProps._elemdata,'True')
     filledregions.fill(-10)
     
     
     #landmarks[appendagenode]=0 # TODO: skipping appendage node for now
     
-#    for region in regions:
-#        for a,b in region.values():
-#            if appendagenode not in (a,b):
-#                if a in landmarks and b not in landmarks:
-#                    oldlmnode=nodes[a]
-#                    newlm=b
-#                elif b in landmarks and a not in landmarks:
-#                    oldlmnode=nodes[b]
-#                    newlm=a
-#                else:
-#                    continue
-#                
-#                newlmnode=min(edgenodeinds.difference({a,b}),key=lambda i:nodes[i].distToSq(oldlmnode)) # ragged edge node closest to landmark
-#                landmarks[newlm]=newlmnode
-##                eidolon.printFlush(newlm,newlmnode,graph.getPath(min(a,b),newlmnode),'\n')
-#                
+    for region in regions:
+        for a,b in region.values():
+            if appendagenode not in (a,b):
+                if a in landmarks and b not in landmarks:
+                    oldlmnode=nodes[landmarks[a]]
+                    newlm=b
+                elif b in landmarks and a not in landmarks:
+                    oldlmnode=nodes[landmarks[b]]
+                    newlm=a
+                else:
+                    continue
+                
+                newlmnode=min(edgenodeinds,key=lambda i:nodes[i].distToSq(oldlmnode)) # ragged edge node closest to landmark
+                landmarks[newlm]=newlmnode
+                
+#                eidolon.printFlush(newlm,newlmnode,graph.getPath(min(a,b),newlmnode),'\n')
+                
+#                line=findTrisBetweenNodes(a,b,landmarks,graph)
+#                for tri in line:
+#                    filledregions[tri,0]=max(a,b)
+                
     
     if task:
         task.setMaxProgress(len(regions))
@@ -719,25 +726,27 @@ def extractTriRegion(nodes,tris,acceptFunc):
 
 def calculateGradientDirs(nodes,edges,gradientField):
     '''
-    Returns a RealMatrix object containing the vector field for each node of `graph' pointing in the gradient direction
-    for the given field RealMatrix object `gradientField'.
+    Returns a RealMatrix object containing the vector field for each node of `nodes' pointing in the gradient direction
+    for the given field RealMatrix object `gradientField'. The `edges' argument is a map relating each node index to the 
+    set of node indices sharing an edge with that index.
     '''
     #https://math.stackexchange.com/questions/2627946/how-to-approximate-numerically-the-gradient-of-the-function-on-a-triangular-mesh/2632616#2632616
     
     numnodes=len(nodes)
-    nodedirs=eidolon.RealMatrix(gradientDirField,numnodes,3)
+    nodedirs=[]#eidolon.RealMatrix(gradientDirField,numnodes,3)
     
     for n in range(numnodes):
         ngrad=gradientField[n]
         nnode=nodes[n]
         edgegrads=[gradientField[i]-ngrad for i in edges[n]] # field gradient in edge directions
         edgedirs=[nodes[i]-nnode for i in edges[n]] # edge directional vectors
-        minlen=min(e.lenSq() for e in edgedirs)**0.5
+#        minlen=min(e.lenSq() for e in edgedirs)**0.5
         edgedirs=[list(e) for e in edgedirs]
         
         # node direction is solution for x in Ax=b where A is edge directions and b edge gradients
         nodedir=np.linalg.lstsq(np.asarray(edgedirs),np.asarray(edgegrads),rcond=None)
-        nodedirs[n]=vec3(*nodedir[0]).norm()*minlen
+        #nodedirs[n]=vec3(*nodedir[0]).norm()*minlen
+        nodedirs.append(vec3(*nodedir[0]).norm())
     
     return nodedirs
     
@@ -759,27 +768,33 @@ def calculateDirectionField(obj,landmarkObj,regions,regtype,tempdir,VTK):
     landmarks=[nodes.indexOf(lm)[0] for lm in lmnodes]
     
     directionfield=RealMatrix(directionField,nodes.n(),3)
-    directionfield.fill(-10)
+    directionfield.fill(0)
     
     gradientfield=RealMatrix('gradient',nodes.n(),1)
     gradientfield.fill(-1)
     
     obj.datasets[0].setDataField(gradientfield)
+    obj.datasets[0].setDataField(directionfield)
+    
+    def selectRegion(region,triregions):
+        return region==int(triregions[0]) or region==int(triregions[1]) or region==int(triregions[2])
     
     def collectNodes(nodemap,trimap,components):
+        '''Collect the nodes for the given components, being lines or landmark points.'''
         nodeinds=set()
         for comp in components:
             if comp[0]=='L':
                 lind=int(comp[1:])-1
                 
                 for tri in trimap:
-                    if int(regionfield[tri,2])==lind:
+                    if int(regionfield[tri,0])==lind:
                         nodeinds.update(nodemap[t] for t in tris[tri])
             else:
                 nodeinds.add(nodemap[landmarks[int(comp[1:])-1]])
                 
         return nodeinds
     
+    # for each region calculate the laplace gradient and fill in the direction field
     for r in regions:
         eidolon.printFlush('Region',r,lmstim[r],lmground[r])
         
@@ -788,7 +803,7 @@ def calculateDirectionField(obj,landmarkObj,regions,regtype,tempdir,VTK):
             lfile=os.path.join(tempdir,'region%.2i.log'%r)
             ofile=os.path.join(tempdir,'region%.2i.vtk'%r)
             pfile=os.path.join(tempdir,'region%.2i.py'%r)
-            newnodes,newtris,nodemap,trimap=extractTriRegion(nodes,tris,lambda i:r in regionfield[i,:2])
+            newnodes,newtris,nodemap,trimap=extractTriRegion(nodes,tris,lambda i:selectRegion(r,regionfield[i,1:]))
             
             assert len(newtris)>0, 'Empty region selected'
             
@@ -833,8 +848,94 @@ def calculateDirectionField(obj,landmarkObj,regions,regtype,tempdir,VTK):
             for oldn,newn in nodemap.items():
                 gradientfield[oldn,0]=gfield[newn]
                 
+            graddirs=calculateGradientDirs(newnodes,generateSimplexEdgeMap(len(newnodes),newtris),gfield)
+            
+            for oldn,newn in nodemap.items():
+                directionfield[oldn]=graddirs[newn]+vec3(*directionfield[oldn])
+                
         except Exception as e:
             eidolon.printFlush(e)
+            
+    return gradientfield,directionfield
+
+
+def calculateTetDirections(tetmesh,endomesh,epimesh,endodir,epidir,tempdir,VTK):
+    
+    def getTriCenterOctree(obj,ocdepth=2):
+        ds=obj.datasets[0]
+        nodes=ds.getNodes()
+        tris=first(ind for ind in ds.enumIndexSets() if ind.m()==3 and bool(ind.meta(StdProps._isspatial)))
+    
+        graph=TriMeshGraph(nodes,tris)
+        centeroc=eidolon.Octree(ocdepth,graph.boundbox.getDimensions(),graph.boundbox.center)
+        
+        for i,c in enumerate(graph.tricenters):
+            centeroc.addNode(c,i)
+            
+        return graph,centeroc
+    
+    et=ElemType.Tet1NL
+    faces=et.faces
+    
+    rfile=os.path.join(tempdir,'tetmesh.mesh')
+    lfile=os.path.join(tempdir,'tetmesh.log')
+    ofile=os.path.join(tempdir,'tetmesh.vtk')
+    pfile=os.path.join(tempdir,'tetmesh.py')
+    
+    ds=tetmesh.datasets[0]
+    eidolon.calculateElemExtAdj(ds)
+
+    nodes=ds.getNodes()
+    tets=first(i for i in ds.enumIndexSets() if i.getType()==ElemType._Tet1NL)
+    ext=first(i for i in ds.enumIndexSets() if i.getName().endswith(eidolon.MatrixType.external[1]))
+    
+    endograph,endooc=getTriCenterOctree(endomesh)
+    epigraph,epioc=getTriCenterOctree(epimesh)
+    
+    # relates triangle to (elem,face) pair
+    endofacemap={}
+    epifacemap={}
+    
+    # set of nodes from the tet mesh on each surface
+    endonodes=set()
+    epinodes=set()
+    
+    # iterate over each element and fill in the above map and set values
+    for elem in range(ext.n()):
+        externs=ext[elem,:]
+        
+        for fnum in range(len(faces)):
+            face=faces[fnum][:3]
+            faceinds=[tets[elem,i] for i in face]
+            
+            if externs[fnum]:
+                mid=avg(nodes[i] for i in faceinds)
+                if mid in endooc:
+                    endonodes.update(faceinds)
+                    endofacemap[endooc.getNode(mid)]=(elem,fnum)
+                elif mid in epioc:
+                    epinodes.update(faceinds)
+                    epifacemap[endooc.getNode(mid)]=(elem,fnum)
+    
+    assert endonodes
+    assert epinodes
+    nodegroup=[1 if n in endonodes else (2 if n in epinodes else 0) for n in range(len(nodes))]
+    
+    writeMeshFile(rfile,nodes,tets,nodegroup,None,3)
+    
+    with open(problemFile) as p:
+        with open(pfile,'w') as o:
+            o.write(p.read()%{'inputfile':rfile,'outdir':tempdir})
+        
+    p=ProblemConf.from_file(pfile)
+    output.set_output(lfile,True,True)
+    solve_pde(p)
+    
+    robj=VTK.loadObject(ofile)
+    gfield=robj.datasets[0].getDataField('t')
+    
+    
+    
             
 ### Project objects
 
@@ -1009,10 +1110,13 @@ class AtrialFibreProject(Project):
         self.mgr.runTasks(_save())
             
     def _generate(self):
+        tetmesh=self.getProjectObj(self.configMap.get(objNames._origmesh,''))
         endomesh=self.getProjectObj(self.configMap.get(objNames._endomesh,''))
         epimesh=self.getProjectObj(self.configMap.get(objNames._epimesh,''))
         
-        if endomesh is None:
+        if tetmesh is None:
+            self.mgr.showMsg('Cannot find original tet mesh %r'%self.configMap.get(objNames._endomesh,''))
+        elif endomesh is None:
             self.mgr.showMsg('Cannot find endo mesh %r'%self.configMap.get(objNames._endomesh,''))
         elif epimesh is None:
             self.mgr.showMsg('Cannot find epi mesh %r'%self.configMap.get(objNames._epimesh,''))
@@ -1026,9 +1130,18 @@ class AtrialFibreProject(Project):
             epipoints=self.getProjectObj('epinodes')
             regions=[]
             
-            result=self.AtrialFibre.generateMesh(endomesh,epimesh,endopoints,epipoints,tempdir,regions)
+            result=self.AtrialFibre.generateMesh(endomesh,epimesh,tetmesh,endopoints,epipoints,tempdir,regions)
             self.mgr.checkFutureResult(result)
-#            self.mgr.addSceneObjectTask(result)
+            
+            @taskroutine('Load Rep')
+            def _load(task):
+                
+                rep=endomesh.createRepr(eidolon.ReprType._volume,0)
+                self.mgr.addSceneObjectRepr(rep)
+                rep.applyMaterial('Rainbow',field='gradient',valfunc='Column 1')
+                self.mgr.setCameraSeeAll()
+                
+            self.mgr.runTasks(_load())
 
 
 class AtrialFibrePlugin(ScenePlugin):
@@ -1066,6 +1179,9 @@ class AtrialFibrePlugin(ScenePlugin):
     def createProject(self,name,parentdir):
         if self.project==None:
             self.mgr.createProjectObj(name,parentdir,AtrialFibreProject)
+            
+    def getArchitecture(self,regtype=regTypes._endo):
+        return loadArchitecture(architecture,regtype)
             
     @taskmethod('Import endo/epi shell')
     def importShell(self,filename,task=None):
@@ -1123,8 +1239,11 @@ class AtrialFibrePlugin(ScenePlugin):
         mesh.datasets[0].setDataField(filledregions)
         
     @taskmethod('Generating mesh')  
-    def generateMesh(self,endomesh,epimesh,endopoints,epipoints,outdir,regions=[],task=None):
-        calculateDirectionField(endomesh,endopoints,regions,regTypes._endo,outdir,self.VTK)
+    def generateMesh(self,endomesh,epimesh,tetmesh,endopoints,epipoints,outdir,regions=[],task=None):
+        endograd,endodir=calculateDirectionField(endomesh,endopoints,regions,regTypes._endo,outdir,self.VTK)
+        epigrad,epidir=calculateDirectionField(epimesh,epipoints,regions,regTypes._epi,outdir,self.VTK)
+        
+        calculateTetDirections(tetmesh,endomesh,epimesh,endodir,epidir,outdir,self.VTK)
 
 ### Add the project
 
