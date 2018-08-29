@@ -108,6 +108,24 @@ def showLines(nodes,lines,name='Lines',matname='Default'):
     return obj,rep
 
 
+def showElemDirs(obj,glyphscale,mgr):
+    ds=obj.datasets[0]
+    nodes=ds.getNodes()
+    tets=first(i for i in ds.enumIndexSets() if i.getType()==ElemType._Tet1NL)
+    elemdirfield=ds.getDataField(elemDirField)
+    
+    mid=ElemType.Tet1NL.basis(0.25,0.25,0.25)
+    
+    elemnodes=[ElemType.Tet1NL.applyCoeffs([nodes[e] for e in elem],mid) for elem in tets]
+    elemobj=MeshSceneObject('elemobj',PyDataSet('elemobjds',elemnodes,[],[elemdirfield]))
+    mgr.addSceneObject(elemobj)
+    
+    rep=elemobj.createRepr(eidolon.ReprType._glyph,0,externalOnly=False,drawInternal=True,glyphname='arrow',
+                           glyphscale=glyphscale,dfield=elemdirfield.getName(),vecfunc=eidolon.VecFunc._Linear)
+    
+    mgr.addSceneObjectRepr(rep)
+
+
 class initdict(defaultdict):
     def __init__(self,initfunc,*args,**kwargs):
         defaultdict.__init__(self,None,*args,**kwargs)
@@ -941,8 +959,10 @@ def followElemDirAdj(elemdiradj,task=None):
         '''From the starting element, follow the adjacency hops until a surface element is found.'''
         curelem=start
         index=1 if isForward else 3
+        visited=set()
         
-        while curelem>=start and elemdiradj[curelem,index]<elemdiradj.n():
+        while curelem not in visited and curelem>=start and elemdiradj[curelem,index]<elemdiradj.n():
+            visited.add(curelem)
             curelem=elemdiradj[curelem,index]
             
         if curelem<start: # previously assigned value, use this since the path from here on is the same
@@ -968,32 +988,8 @@ def followElemDirAdj(elemdiradj,task=None):
     return result
 
 
-#def interpolateElemDirections(elems,elemFollow,gradField,directionalField):
-#    et=ElemType[elems.getType()]
-#    elemdirField=RealMatrix('elemdirField',elems.n(),3)
-#    elemdirField.meta(StdProps._elemdata,'True')
-#    elemdirField.fill(0)
-#    
-#    def getDirectionalFaceValue(elem,face):
-#        endinds=elems[elem]
-#        faceinds=[endinds[f] for f in et.faces[face]]
-#        return avg(vec3(*directionalField[f]) for f in faceinds).norm()
-#    
-#    for e in range(elems.n()):
-#        elem1,face1,elem2,face2=elemFollow[e]
-#        
-#        dir1=getDirectionalFaceValue(elem1,face1)
-#        dir2=getDirectionalFaceValue(elem2,face2)
-#        grad=avg(gradField[i] for i in elems[e])
-#        
-#        elemdirField[e]=tuple(dir1*grad+dir2*(1-grad))
-#        
-#        
-#    return elemdirField
-
-
 @timing
-def calculateTetDirections(tetmesh,endomesh,epimesh,endodir,epidir,tempdir,interpFunc,VTK,task=None):
+def calculateTetDirections(tetmesh,endomesh,epimesh,tempdir,interpFunc,VTK,task=None):
     
     def getTriCenterOctree(obj,ocdepth=2):
         ds=obj.datasets[0]
@@ -1033,14 +1029,8 @@ def calculateTetDirections(tetmesh,endomesh,epimesh,endodir,epidir,tempdir,inter
     
     ds.setDataField(elemdirfield)
     
-#    ext=first(i for i in ds.enumIndexSets() if i.getName().endswith(eidolon.MatrixType.external[1]))
-    
     endograph,endooc,endodirs=getTriCenterOctree(endomesh)
     epigraph,epioc,epidirs=getTriCenterOctree(epimesh)
-    
-#    # relates triangle to (elem,face) pair
-#    endofacemap={}
-#    epifacemap={}
     
     # set of nodes from the tet mesh on each surface
     endonodes=set()
@@ -1050,9 +1040,9 @@ def calculateTetDirections(tetmesh,endomesh,epimesh,endodir,epidir,tempdir,inter
         inds=graph.tris[tri]
         trinodes=[graph.nodes[i] for i in inds]
         trinorm=trinodes[0].planeNorm(trinodes[1],trinodes[2])
-        tridir=avg(vec3(*dirs[i]) for i in inds)
+        tridir=avg(vec3(*dirs[i]).norm() for i in inds)
         
-        return tridir.planeProject(trinodes[0],trinorm).norm()
+        return tridir.planeProject(vec3(),trinorm).norm()
     
     # iterate over each element and fill in the above map and set values
     for elem in range(numElems):
@@ -1069,36 +1059,18 @@ def calculateTetDirections(tetmesh,endomesh,epimesh,endodir,epidir,tempdir,inter
                     tri=endooc.getNode(mid)
                     tridir=calculateTriDir(endograph,tri,endodirs)
                     endonodes.update(faceinds)
-#                    endofacemap[tri]=(elem,fnum)
                 elif mid in epioc:
                     tri=epioc.getNode(mid)
                     tridir=calculateTriDir(epigraph,tri,epidirs)
                     epinodes.update(faceinds)
-#                    epifacemap[tri]=(elem,fnum)
                 
             # set the direction for the equivalent element
             if tridir is not None:
-#                trinodes=[nodes[i] for i in faceinds]
-#                trinorm=trinodes[0].planeNorm(trinodes[1],trinodes[2])
-#                tridir=vec3(*tridir).planeProject(trinodes[0],trinorm).norm()
                 elemdirfield[elem]=tuple(tridir)
     
     assert endonodes
     assert epinodes
     nodegroup=[1 if n in endonodes else (2 if n in epinodes else 0) for n in range(len(nodes))]
-    
-#    writeMeshFile(rfile,nodes,tets,nodegroup,None,3)
-#    
-#    with open(problemFile) as p:
-#        with open(pfile,'w') as o:
-#            o.write(p.read()%{'inputfile':rfile,'outdir':tempdir})
-#        
-#    p=ProblemConf.from_file(pfile)
-#    output.set_output(lfile,True,True)
-#    solve_pde(p)
-#    
-#    robj=VTK.loadObject(ofile)
-#    gfield=robj.datasets[0].getDataField('t')
     
     gfield=calculateMeshGradient(rfile,ofile,pfile,lfile,tempdir,nodes,tets,nodegroup,VTK)
     
@@ -1116,7 +1088,7 @@ def calculateTetDirections(tetmesh,endomesh,epimesh,endodir,epidir,tempdir,inter
         dir2=elemdirfield[elem2]
         grad=avg(gfield[i] for i in tets[e])
         
-        elemdirfield[e]=interpFunc(dir1,dir2,grad)
+        elemdirfield[e]=interpFunc(vec3(*dir1),vec3(*dir2),grad)
     
     return elemdirfield
     
@@ -1333,6 +1305,8 @@ class AtrialFibreProject(Project):
                 
                 self.mgr.setCameraSeeAll()
                 
+                showElemDirs(tetmesh,(50,50,100),self.mgr)
+                
             self.mgr.runTasks([_save(),_load()])
 
 
@@ -1435,7 +1409,7 @@ class AtrialFibrePlugin(ScenePlugin):
         endograd,endodir=calculateDirectionField(endomesh,endopoints,regions,regTypes._endo,outdir,self.VTK)
         epigrad,epidir=calculateDirectionField(epimesh,epipoints,regions,regTypes._epi,outdir,self.VTK)
         
-        return calculateTetDirections(tetmesh,endomesh,epimesh,endodir,epidir,outdir,None,self.VTK,task)
+        return calculateTetDirections(tetmesh,endomesh,epimesh,outdir,None,self.VTK,task)
 
 ### Add the project
 
