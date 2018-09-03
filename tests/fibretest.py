@@ -96,6 +96,8 @@ grad=outobj.datasets[0].getDataField('t')
 grad.meta(StdProps._spatial,'inds')
 grad.meta(StdProps._topology,'inds')
 ds.setDataField(grad)
+
+grad=calculateMeshGradient(os.path.join(tempdir,'tetmesh'),nodes,tets,nodegroup,VTK)
         
 
 dirs=calculateGradientDirs(ds.getNodes(),generateSimplexEdgeMap(ds.getNodes().n(),tinds),grad)

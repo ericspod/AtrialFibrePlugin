@@ -75,11 +75,21 @@ dataSigma=0.1
 stepSize=0.000001
 
 # field names
-regionField='regions'
-landmarkField='landmarks'
-directionField='directions'
-gradientDirField='gradientDirs'
-elemDirField='elemDirs'
+#regionField='regions'
+#landmarkField='landmarks'
+#directionField='directions'
+#gradientDirField='gradientDirs'
+#elemDirField='elemDirs'
+#elemRegionField='elemRegions'
+#elemthickness='elemThickness'
+#elemGradient='elemGradient'
+
+fieldNames=eidolon.enum(
+    'regions','landmarks',
+    'directions','gradientDirs',
+    'elemDirs','elemRegions','elemThickness', 
+    'nodeGradient'
+)
 
 objNames=eidolon.enum(
     'atlasmesh',
@@ -112,7 +122,7 @@ def showElemDirs(obj,glyphscale,mgr):
     ds=obj.datasets[0]
     nodes=ds.getNodes()
     tets=first(i for i in ds.enumIndexSets() if i.getType()==ElemType._Tet1NL)
-    elemdirfield=ds.getDataField(elemDirField)
+    elemdirfield=ds.getDataField(fieldNames._elemDirs)
     
     mid=ElemType.Tet1NL.basis(0.25,0.25,0.25)
     
@@ -667,7 +677,7 @@ def generateRegionField(obj,landmarkObj,regions,appendageregion,appendagenode,ta
     
     edgenodeinds=set(eidolon.listSum(graph.ragged)) # list of all node indices on the ragged edge
     
-    filledregions=RealMatrix(regionField,tris.n(),4)
+    filledregions=RealMatrix(fieldNames._regions,tris.n(),4)
     filledregions.meta(StdProps._elemdata,'True')
     filledregions.fill(-10)
     
@@ -743,7 +753,14 @@ def extractTriRegion(nodes,tris,acceptFunc):
     return newnodes,newtris,nodemap,trimap
     
 
-def calculateMeshGradient(infile,outfile,probfile,logfile,tempdir,nodes,elems,groups,VTK):
+def calculateMeshGradient(prefix,nodes,elems,groups,VTK):
+    '''Calculate the laplace gradient for the mesh given as (nodes,elems,groups) using sfepy.'''
+    tempdir=os.path.dirname(prefix)
+    infile=prefix+'.mesh'
+    logfile=prefix+'.log'
+    outfile=prefix+'.vtk'
+    probfile=prefix+'.py'
+    
     writeMeshFile(infile,nodes,elems,groups,None,3)
     
     with open(problemFile) as p:
@@ -801,13 +818,13 @@ def calculateDirectionField(obj,landmarkObj,regions,regtype,tempdir,VTK):
     ds=obj.datasets[0]
     nodes=ds.getNodes()
     tris=first(ind for ind in ds.enumIndexSets() if ind.m()==3 and bool(ind.meta(StdProps._isspatial)))
-    regionfield=ds.getDataField(regionField)
+    regionfield=ds.getDataField(fieldNames._regions)
     regionfield=np.asarray(regionfield,np.int32)
     
     lmnodes=landmarkObj.datasets[0].getNodes()
     landmarks=[nodes.indexOf(lm)[0] for lm in lmnodes]
     
-    directionfield=RealMatrix(directionField,nodes.n(),3)
+    directionfield=RealMatrix(fieldNames._directions,nodes.n(),3)
     directionfield.fill(0)
     
     gradientfield=RealMatrix('gradient',nodes.n(),1)
@@ -839,10 +856,6 @@ def calculateDirectionField(obj,landmarkObj,regions,regtype,tempdir,VTK):
         eidolon.printFlush('Region',r,lmstim[r],lmground[r])
         
         try:
-            rfile=os.path.join(tempdir,'region%.2i.mesh'%r)
-            lfile=os.path.join(tempdir,'region%.2i.log'%r)
-            ofile=os.path.join(tempdir,'region%.2i.vtk'%r)
-            pfile=os.path.join(tempdir,'region%.2i.py'%r)
             newnodes,newtris,nodemap,trimap=extractTriRegion(nodes,tris,lambda i:selectRegion(r,regionfield[i,1:]))
             
             assert len(newtris)>0, 'Empty region selected'
@@ -885,7 +898,7 @@ def calculateDirectionField(obj,landmarkObj,regions,regtype,tempdir,VTK):
 #            robj=VTK.loadObject(ofile)
 #            gfield=robj.datasets[0].getDataField('t')
             
-            gfield=calculateMeshGradient(rfile,ofile,pfile,lfile,tempdir,newnodes,newtris,nodegroup,VTK)
+            gfield=calculateMeshGradient(os.path.join(tempdir,'region%.2i'%r),newnodes,newtris,nodegroup,VTK)
             
             for oldn,newn in nodemap.items():
                 gradientfield[oldn,0]=gfield[newn]
@@ -989,6 +1002,54 @@ def followElemDirAdj(elemdiradj,task=None):
 
 
 @timing
+def estimateThickness(nodes,tets,elemdiradj,task=None):
+    '''
+    Follow the direction adjacency matrix `elemdiradj', and estimate thickness by measuring how far each tet along the
+    path to the forward and backward surface is. The assigned value in the returned field is the maximal estimated 
+    thickness for each element.
+    '''
+    result=RealMatrix(fieldNames._elemThickness,tets.n(),1)
+    result.fill(elemdiradj.n())
+    result.meta(StdProps._elemdata,'True')
+    result.fill(-1)
+    
+    def getTetCenter(ind):
+        return avg(nodes.mapIndexRow(tets,ind))
+    
+    def followElem(start,isForward):
+        curelem=start
+        index=1 if isForward else 3
+        visited=set()
+        curpos=getTetCenter(start)
+        dist=0
+        
+        while elemdiradj[curelem,index]<elemdiradj.n():
+            visited.add(curelem)
+            curelem=elemdiradj[curelem,index]
+            
+            if curelem in visited: # circular path, assign no value to this element
+                dist=0
+                break
+            else:
+                nextpos=getTetCenter(curelem)
+                dist+=nextpos.distTo(curpos)
+                curpos=nextpos
+            
+        return dist
+    
+    if task:
+        task.setMaxProgress(elemdiradj.n())
+        
+    for e in range(elemdiradj.n()):
+        result[e]=max(result[e],followElem(e,True)+followElem(e,False))
+        
+        if task:
+            task.setProgress(e+1)
+            
+    return result
+
+
+@timing
 def calculateTetDirections(tetmesh,endomesh,epimesh,tempdir,interpFunc,VTK,task=None):
     
     def getTriCenterOctree(obj,ocdepth=2):
@@ -1002,18 +1063,13 @@ def calculateTetDirections(tetmesh,endomesh,epimesh,tempdir,interpFunc,VTK,task=
         for i,c in enumerate(graph.tricenters):
             centeroc.addNode(c,i)
             
-        return graph,centeroc,ds.getDataField(directionField)
+        return graph,centeroc,ds.getDataField(fieldNames._directions),ds.getDataField(fieldNames._regions)
     
     if interpFunc is None:
         interpFunc=lambda dir1,dir2,grad:tuple(dir1*grad+dir2*(1-grad))
     
     et=ElemType.Tet1NL
-    faces=et.faces
-    
-    rfile=os.path.join(tempdir,'tetmesh.mesh')
-    lfile=os.path.join(tempdir,'tetmesh.log')
-    ofile=os.path.join(tempdir,'tetmesh.vtk')
-    pfile=os.path.join(tempdir,'tetmesh.py')
+    faces=[f[:3] for f in et.faces]
     
     ds=tetmesh.datasets[0]
     eidolon.calculateElemExtAdj(ds)
@@ -1023,14 +1079,20 @@ def calculateTetDirections(tetmesh,endomesh,epimesh,tempdir,interpFunc,VTK,task=
     adj=ds.getIndexSet(tets.getName()+eidolon.MatrixType.adj[1])
     numElems=tets.n()
     
-    elemdirfield=RealMatrix(elemDirField,tets.n(),3)
+    elemdirfield=RealMatrix(fieldNames._elemDirs,tets.n(),3)
     elemdirfield.fill(0)
     elemdirfield.meta(StdProps._elemdata,'True')
     
     ds.setDataField(elemdirfield)
     
-    endograph,endooc,endodirs=getTriCenterOctree(endomesh)
-    epigraph,epioc,epidirs=getTriCenterOctree(epimesh)
+    elemregions=RealMatrix(fieldNames._regions,tets.n(),4)
+    elemregions.meta(StdProps._elemdata,'True')
+    elemregions.fill(-1)
+    
+    ds.setDataField(elemregions)
+    
+    endograph,endooc,endodirs,endoregions=getTriCenterOctree(endomesh)
+    epigraph,epioc,epidirs,epiregions=getTriCenterOctree(epimesh)
     
     # set of nodes from the tet mesh on each surface
     endonodes=set()
@@ -1044,26 +1106,27 @@ def calculateTetDirections(tetmesh,endomesh,epimesh,tempdir,interpFunc,VTK,task=
         
         return tridir.planeProject(vec3(),trinorm).norm()
     
-    # iterate over each element and fill in the above map and set values
+    # iterate over each element and fill in the above map and set values for endonodes, epinodes, and elemregions
     for elem in range(numElems):
         externs=adj[elem,:4]
+        extfaces=[f for i,f in enumerate(faces) if externs[i]==numElems]
         
-        for fnum in range(len(faces)):
-            face=faces[fnum][:3]
+        for face in extfaces:
             faceinds=[tets[elem,i] for i in face]
+            mid=avg(nodes[i] for i in faceinds)
             tridir=None
             
-            if externs[fnum]==numElems:
-                mid=avg(nodes[i] for i in faceinds)
-                if mid in endooc:
-                    tri=endooc.getNode(mid)
-                    tridir=calculateTriDir(endograph,tri,endodirs)
-                    endonodes.update(faceinds)
-                elif mid in epioc:
-                    tri=epioc.getNode(mid)
-                    tridir=calculateTriDir(epigraph,tri,epidirs)
-                    epinodes.update(faceinds)
-                
+            if mid in endooc:
+                tri=endooc.getNode(mid)
+                tridir=calculateTriDir(endograph,tri,endodirs)
+                endonodes.update(faceinds)
+                elemregions[elem]=endoregions[tri]
+            elif mid in epioc:
+                tri=epioc.getNode(mid)
+                tridir=calculateTriDir(epigraph,tri,epidirs)
+                epinodes.update(faceinds)
+                elemregions[elem]=epiregions[tri]
+                    
             # set the direction for the equivalent element
             if tridir is not None:
                 elemdirfield[elem]=tuple(tridir)
@@ -1072,7 +1135,9 @@ def calculateTetDirections(tetmesh,endomesh,epimesh,tempdir,interpFunc,VTK,task=
     assert epinodes
     nodegroup=[1 if n in endonodes else (2 if n in epinodes else 0) for n in range(len(nodes))]
     
-    gfield=calculateMeshGradient(rfile,ofile,pfile,lfile,tempdir,nodes,tets,nodegroup,VTK)
+    gfield=calculateMeshGradient(os.path.join(tempdir,'tetmesh'),nodes,tets,nodegroup,VTK)
+    gfield.setName(fieldNames._nodeGradient)
+    ds.setDataField(gfield)
     
     # convert gradient into node directions
     dirs=calculateGradientDirs(nodes,generateSimplexEdgeMap(nodes.n(),tets),gfield)
@@ -1080,6 +1145,9 @@ def calculateTetDirections(tetmesh,endomesh,epimesh,tempdir,interpFunc,VTK,task=
     # follow gradient and determine which elements/faces are the forward and backward endpoints of each element's gradient line
     elemdiradj=getElemDirectionAdj(nodes,tets,adj,dirs)
     elemFollow=followElemDirAdj(elemdiradj,task)
+    
+    elemThickness=estimateThickness(nodes,tets,elemdiradj,task)
+    ds.setDataField(elemThickness)
     
     for e in range(tets.n()):
         elem1,face1,elem2,face2=elemFollow[e]
@@ -1258,7 +1326,7 @@ class AtrialFibreProject(Project):
             
             rep=mesh.createRepr(eidolon.ReprType._volume,0)
             self.mgr.addSceneObjectRepr(rep)
-            rep.applyMaterial('Rainbow',field=regionField,valfunc='Column 1')
+            rep.applyMaterial('Rainbow',field=fieldNames._regions,valfunc='Column 1')
             self.mgr.setCameraSeeAll()
             
 #            lobj,lrep=showLines(points.datasets[0].getNodes(),lmlines,'AllLines','Red')
@@ -1301,7 +1369,7 @@ class AtrialFibreProject(Project):
                 
                 rep=tetmesh.createRepr(eidolon.ReprType._volume,0)
                 self.mgr.addSceneObjectRepr(rep)
-                rep.applyMaterial('Rainbow',field=elemDirField,valfunc='Magnitude')
+                rep.applyMaterial('Rainbow',field=fieldNames._elemDirs,valfunc='Magnitude')
                 
                 self.mgr.setCameraSeeAll()
                 

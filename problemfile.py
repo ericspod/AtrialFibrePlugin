@@ -1,4 +1,5 @@
-filename_mesh=r'%(inputfile)s'
+
+filename_mesh = r'%(inputfile)s'
     
 material_2 = {
     'name' : 'coef',
@@ -6,7 +7,7 @@ material_2 = {
 }
 
 regions = {
-    'Omega' : 'all', # or 'cells of group 6'
+    'Omega' : 'all', 
     'Active' : ('vertices of group 1', 'vertex'),
     'Ground' : ('vertices of group 2', 'vertex'),
 }
