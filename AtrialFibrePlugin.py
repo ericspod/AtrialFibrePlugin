@@ -455,7 +455,7 @@ def generateNodeElemMap(numnodes,tris):
         for n in tri:
             nodemap[n].add(i)
             
-    assert all(len(s)>0 for s in nodemap), 'Unused nodes in triangle topology'
+    #assert all(len(s)>0 for s in nodemap), 'Unused nodes in triangle topology'
             
     return nodemap
     
@@ -1292,17 +1292,22 @@ class AtrialFibreProject(Project):
             self.mgr.removeSceneObject(endo)
             
         tempdir=self.createTempDir('reg') 
-#        tempdir=self.getProjectFile('reg20180530193140') # TODO: for testing
-            
+
         result=self.AtrialFibre.registerLandmarks(subj,atlas,regtype,tempdir)
         
         self.mgr.checkFutureResult(result)
+
+        registered=os.path.join(tempdir,registeredFile)
+
         
         @taskroutine('Add points')
         def _add(task):
             obj=eidolon.Future.get(result)
             obj.setName(regtype+'nodes')
             self.addMesh(obj)
+            
+            regobj=self.VTK.loadObject(registered,'RegisteredMesh')
+            self.addMesh(regobj)
             
         self.mgr.runTasks(_add())
         

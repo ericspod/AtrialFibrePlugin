@@ -1,7 +1,11 @@
-from eidolon import *
+
+import os
+import eidolon
+from eidolon import vec3, RealMatrix, StdProps, avg, halfpi,  ElemType
+
 from AtrialFibrePlugin import (
         writeMeshFile,problemFile, calculateGradientDirs, generateSimplexEdgeMap, TriMeshGraph, generateNodeElemMap,
-        getElemDirectionAdj, followElemDirAdj, interpolateElemDirections
+        getElemDirectionAdj, followElemDirAdj, calculateTetDirections, calculateMeshGradient
         )
 
 from sfepy.base.conf import ProblemConf
@@ -46,7 +50,7 @@ def convertElemToNodeField(elemfield,numnodes,elems):
     
 
 w,h,d=4,4,16
-nodes,inds=generateHexBox(w-2,h-2,d-2)
+nodes,inds=eidolon.generateHexBox(w-2,h-2,d-2)
 
 # twist cube around origin in XZ plane
 nodes=[vec3(0,(1-n.z())*halfpi,n.x()+1).fromPolar()+vec3(0,n.y(),0) for n in nodes]
@@ -58,7 +62,7 @@ tinds=[]
 
 # convert hex to tets, warning: index() relies on float precision
 hx=ElemType.Hex1NL.xis
-tx=divideHextoTet(1)
+tx=eidolon.divideHextoTet(1)
 for hexind in inds:
    for tet in tx:
        tinds.append([hexind[hx.index(t)] for t in tet])
@@ -74,12 +78,12 @@ directionalField[:w*h]=[(1,0,0)]*(w*h) # bottom fibre directional nodes
 directionalField[-w*h:]=[(0,1,1)]*(w*h) # top fibre directional nodes
 
 
-surfacefaces=listSum(selectTetFace(t,bottomnodes+topnodes) for t in tinds) # list of surface face indices
+surfacefaces=eidolon.listSum(selectTetFace(t,bottomnodes+topnodes) for t in tinds) # list of surface face indices
 surfacegraph=TriMeshGraph(nodes,surfacefaces)
 
 fields=[('boundaryfield',boundaryfield,'inds'),('directionalField',directionalField,'inds')]
-ds=PyDataSet('boxDS',nodes,[('inds',ElemType._Tet1NL,tinds)],fields)
-obj=MeshSceneObject('box',ds)    
+ds=eidolon.PyDataSet('boxDS',nodes,[('inds',ElemType._Tet1NL,tinds)],fields)
+obj=eidolon.MeshSceneObject('box',ds)    
 mgr.addSceneObject(obj)
 
 writeMeshFile('test.mesh',nodes,tinds,boundaryfield,None,3)
@@ -198,34 +202,34 @@ ds.setDataField(dirs)
 #    return elemdirField
         
 
-elemdiradj=getElemDirectionAdj(ds.getNodes(),ds.getIndexSet('inds'),dirs)
-elemFollow=followElemDirAdj(elemdiradj)
-
-elemDirField=interpolateElemDirections(ds.getIndexSet('inds'),elemFollow,grad,directionalField)
-#elemDirField=convertElemToNodeField(elemDirField,ds.getNodes().n(),ds.getIndexSet('inds'))
-elemDirField.meta(StdProps._spatial,'inds')
-elemDirField.meta(StdProps._topology,'inds')
-ds.setDataField(elemDirField)
-
-
-rep=obj.createRepr(ReprType._line,0)
-mgr.addSceneObjectRepr(rep)
-
-mid=ElemType.Tet1NL.basis(0.25,0.25,0.25)
-
-elemnodes=[ElemType.Tet1NL.applyCoeffs([nodes[e] for e in elem],mid) for elem in tinds]
-elemobj=MeshSceneObject('elemobj',PyDataSet('elemobjds',elemnodes,[],[elemDirField,dirs,convertNodeToElemField(grad,ds.getIndexSet('inds'))]))
-mgr.addSceneObject(elemobj)
-
-rep=elemobj.createRepr(ReprType._glyph,0,externalOnly=False,drawInternal=True,glyphname='arrow',glyphscale=(0.01,0.01,0.03),
-                   dfield=elemDirField.getName(),vecfunc=VecFunc._Linear,matname='Rainbow',field=grad.getName())
-
-mgr.addSceneObjectRepr(rep)
-
-#rep=obj.createRepr(ReprType._volume,matname='Rainbow',field=elemDirField.getName())
+#elemdiradj=getElemDirectionAdj(ds.getNodes(),ds.getIndexSet('inds'),dirs)
+#elemFollow=followElemDirAdj(elemdiradj)
+#
+#elemDirField=interpolateElemDirections(ds.getIndexSet('inds'),elemFollow,grad,directionalField)
+##elemDirField=convertElemToNodeField(elemDirField,ds.getNodes().n(),ds.getIndexSet('inds'))
+#elemDirField.meta(StdProps._spatial,'inds')
+#elemDirField.meta(StdProps._topology,'inds')
+#ds.setDataField(elemDirField)
+#
+#
+#rep=obj.createRepr(ReprType._line,0)
 #mgr.addSceneObjectRepr(rep)
-
-mgr.setAxesType(AxesType._originarrows) # top right corner axes
-mgr.controller.setRotation(0.8,0.8)
-mgr.setCameraSeeAll()
+#
+#mid=ElemType.Tet1NL.basis(0.25,0.25,0.25)
+#
+#elemnodes=[ElemType.Tet1NL.applyCoeffs([nodes[e] for e in elem],mid) for elem in tinds]
+#elemobj=MeshSceneObject('elemobj',PyDataSet('elemobjds',elemnodes,[],[elemDirField,dirs,convertNodeToElemField(grad,ds.getIndexSet('inds'))]))
+#mgr.addSceneObject(elemobj)
+#
+#rep=elemobj.createRepr(ReprType._glyph,0,externalOnly=False,drawInternal=True,glyphname='arrow',glyphscale=(0.01,0.01,0.03),
+#                   dfield=elemDirField.getName(),vecfunc=VecFunc._Linear,matname='Rainbow',field=grad.getName())
+#
+#mgr.addSceneObjectRepr(rep)
+#
+##rep=obj.createRepr(ReprType._volume,matname='Rainbow',field=elemDirField.getName())
+##mgr.addSceneObjectRepr(rep)
+#
+#mgr.setAxesType(AxesType._originarrows) # top right corner axes
+#mgr.controller.setRotation(0.8,0.8)
+#mgr.setCameraSeeAll()
 
