@@ -1168,6 +1168,9 @@ class AtrialFibreProject(Project):
         
         self.backDir=self.logDir=self.getProjectFile('logs')
         
+        self.editObj=None # landmark object being edited
+        self.editRep=None # node representation being edited
+        
         self.addHandlers()
         
     def create(self):
@@ -1208,6 +1211,11 @@ class AtrialFibreProject(Project):
         
         self.afprop.genButton.clicked.connect(self._generate)
         
+        self.afprop.endoDoneButton.setVisible(False)
+        self.afprop.endoCancelButton.setVisible(False)
+        self.afprop.epiDoneButton.setVisible(False)
+        self.afprop.epiCancelButton.setVisible(False)
+        
         return prop
         
     def updatePropBox(self,proj,prop):
@@ -1216,10 +1224,18 @@ class AtrialFibreProject(Project):
         scenemeshes=[o for o in self.memberObjs if isinstance(o,eidolon.MeshSceneObject)]
 
         names=sorted(o.getName() for o in scenemeshes)
-        eidolon.fillList(self.afprop.atlasBox,names,self.configMap.get(objNames._atlasmesh,-1))
-        eidolon.fillList(self.afprop.origBox,names,self.configMap.get(objNames._origmesh,-1))
-        eidolon.fillList(self.afprop.endoBox,names,self.configMap.get(objNames._endomesh,-1))
-        eidolon.fillList(self.afprop.epiBox,names,self.configMap.get(objNames._epimesh,-1))
+        
+        def _fillList(combo,name):
+            # ensure the config value is actually set, when filling a previously empty list currentIndexChanged isn't emitted 
+            if not self.configMap.get(name,None): 
+                self.configMap[name]=first(names)
+                
+            eidolon.fillList(combo,names,self.configMap[name])
+
+        _fillList(self.afprop.atlasBox,objNames._atlasmesh)
+        _fillList(self.afprop.origBox,objNames._origmesh)
+        _fillList(self.afprop.endoBox,objNames._endomesh)
+        _fillList(self.afprop.epiBox,objNames._epimesh)
         
     @taskmethod('Adding Object to Project')
     def checkIncludeObject(self,obj,task):
@@ -1281,24 +1297,88 @@ class AtrialFibreProject(Project):
         tempdir=self.createTempDir('reg') 
 
         result=self.AtrialFibre.registerLandmarks(subj,atlas,regtype,tempdir)
-        
         self.mgr.checkFutureResult(result)
-
-        registered=os.path.join(tempdir,registeredFile)
-
         
         @taskroutine('Add points')
         def _add(task):
+            name=regtype+'nodes'
+            
+            oldobj=self.getProjectObj(name)
+            if oldobj is not None:
+                self.mgr.removeSceneObject(oldobj)
+            
             obj=eidolon.Future.get(result)
-            obj.setName(regtype+'nodes')
+            obj.setName(name)
             self.addMesh(obj)
             
+            registered=os.path.join(tempdir,registeredFile)
             regobj=self.VTK.loadObject(registered,'RegisteredMesh')
             self.addMesh(regobj)
             
         self.mgr.runTasks(_add())
         
     def _editLandmarks(self,meshname,regtype):
+        if regtype==regTypes._endo:
+            edit,other=self.afprop.endoEdit,self.afprop.epiEdit
+            done,cancel=self.afprop.endoDoneButton,self.afprop.endoCancelButton
+        else:
+            edit,other=self.afprop.epiEdit,self.afprop.endoEdit
+            done,cancel=self.afprop.epiDoneButton,self.afprop.epiCancelButton
+            
+        surface=self.getProjectObj(self.configMap[meshname])
+        landmarks=self.getProjectObj(regtype+'nodes')
+        
+        if surface is None:
+            self.mgr.showMsg('Cannot find surface object %r'%self.configMap[meshname])
+        elif landmarks is None:
+            self.mgr.showMsg('Cannot find landmark object %r'%(regtype+'nodes'))
+        else:
+            other.setEnabled(False)
+            edit.setVisible(False)
+            done.setVisible(True)
+            cancel.setVisible(True)
+            
+            try:
+                done.clicked.disconnect()
+                cancel.clicked.disconnect()
+            except:
+                pass
+    
+            @cancel.clicked.connect
+            def _cancel():
+                other.setEnabled(True)
+                edit.setVisible(True)
+                done.setVisible(False)
+                cancel.setVisible(False)
+            
+            @done.clicked.connect
+            def _done():
+                cancel.clicked.emit() # do cancel's cleanup first
+                self._applyEditedLandmarks()
+                
+            f=self._startEditLandmarks()
+            self.mgr.checkFutureResult(f)
+                
+    @taskmethod('Starting to edit landmarks')
+    def _startEditLandmarks(self,task):
+        if not surface.reprs:
+            rep=surface.createRepr(ReprType._volume,0)
+            self.mgr.addSceneObjectRepr(rep)
+            
+        noderep=landmarks.createRepr(ReprType._node)
+        self.mgr.addSceneObjectRepr(noderep)
+        
+        self.editObj=landmarks
+        self.editRep=noderep
+        
+        @setmethod(noderep)
+        def createHandles():
+            h= rep.__old__createHandles()
+            #TODO: create control handles here
+            
+        self.mgr.showHandle(noderep,True)
+        
+    def _applyEditedLandmarks(self):
         pass
     
     def _divideRegions(self,meshname,regtype):
