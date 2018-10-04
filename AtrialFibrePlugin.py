@@ -885,19 +885,6 @@ def calculateDirectionField(obj,landmarkObj,regions,regtype,tempdir,VTK):
             assert 1 in nodegroup, 'Region %i does not assign stim nodes (%r)'%(r,stimnodes)
             assert 2 in nodegroup, 'Region %i does not assign ground nodes (%r)'%(r,groundnodes)
             
-#            writeMeshFile(rfile,newnodes,newtris,nodegroup,None,3)
-#            
-#            with open(problemFile) as p:
-#                with open(pfile,'w') as o:
-#                    o.write(p.read()%{'inputfile':rfile,'outdir':tempdir})
-#                
-#            p=ProblemConf.from_file(pfile)
-#            output.set_output(lfile,True,True)
-#            solve_pde(p)
-#            
-#            robj=VTK.loadObject(ofile)
-#            gfield=robj.datasets[0].getDataField('t')
-            
             gfield=calculateMeshGradient(os.path.join(tempdir,'region%.2i'%r),newnodes,newtris,nodegroup,VTK)
             
             for oldn,newn in nodemap.items():
