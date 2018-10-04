@@ -42,7 +42,7 @@ except ImportError:
     warnings.warn('SfePy needs to be installed or in PYTHONPATH to generate fiber directions.')
 
 from eidolon import (
-        ScenePlugin, Project, avg, vec3, successive, first, RealMatrix, IndexMatrix, StdProps, timing,
+        ScenePlugin, Project, avg, vec3, successive, first, RealMatrix, IndexMatrix, StdProps, timing, ReprType,
         listToMatrix,MeshSceneObject, BoundBox, ElemType, reduceMesh, PyDataSet, taskmethod, taskroutine
         )
 import eidolon, ui
@@ -1169,6 +1169,7 @@ class AtrialFibreProject(Project):
         self.backDir=self.logDir=self.getProjectFile('logs')
         
         self.editObj=None # landmark object being edited
+        self.editSurface=None # surface landmarks are moved around
         self.editRep=None # node representation being edited
         
         self.addHandlers()
@@ -1356,22 +1357,24 @@ class AtrialFibreProject(Project):
                 cancel.clicked.emit() # do cancel's cleanup first
                 self._applyEditedLandmarks()
                 
+            self.editSurface=surface
+            self.editObj=landmarks
+                
             f=self._startEditLandmarks()
             self.mgr.checkFutureResult(f)
                 
     @taskmethod('Starting to edit landmarks')
     def _startEditLandmarks(self,task):
-        if not surface.reprs:
-            rep=surface.createRepr(ReprType._volume,0)
+        if not self.editSurface.reprs:
+            rep=self.editSurface.createRepr(ReprType._volume,0)
             self.mgr.addSceneObjectRepr(rep)
             
-        noderep=landmarks.createRepr(ReprType._node)
+        noderep=self.editObj.createRepr(ReprType._node)
         self.mgr.addSceneObjectRepr(noderep)
         
-        self.editObj=landmarks
         self.editRep=noderep
         
-        @setmethod(noderep)
+        @eidolon.setmethod(noderep)
         def createHandles():
             h= rep.__old__createHandles()
             #TODO: create control handles here
@@ -1435,11 +1438,11 @@ class AtrialFibreProject(Project):
             
             @taskroutine('Load Rep')
             def _load(task):
-                #rep=endomesh.createRepr(eidolon.ReprType._volume,0)
+                #rep=endomesh.createRepr(ReprType._volume,0)
                 #self.mgr.addSceneObjectRepr(rep)
                 #rep.applyMaterial('Rainbow',field='gradient',valfunc='Column 1')
                 
-                rep=tetmesh.createRepr(eidolon.ReprType._volume,0)
+                rep=tetmesh.createRepr(ReprType._volume,0)
                 self.mgr.addSceneObjectRepr(rep)
                 rep.applyMaterial('Rainbow',field=fieldNames._elemDirs,valfunc='Magnitude')
                 
