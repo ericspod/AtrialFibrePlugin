@@ -1,3 +1,6 @@
+# AtrialFibrePlugin
+# Copyright (C) 2018 Eric Kerfoot, King's College London, all rights reserved, see LICENSE file
+
 
 from .AtrialFibrePlugin import *
 

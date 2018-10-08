@@ -1,6 +1,8 @@
 # AtrialFibrePlugin
 Atrial Fibre Generation
 
+Copyright (C) 2018 Eric Kerfoot, King's College London, all rights reserved, see LICENSE file
+
 ### Setup Notes
 
 1. Use Miniconda3 with Eidolon, it's just the easy way to setup.
