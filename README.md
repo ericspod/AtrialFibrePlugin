@@ -18,3 +18,7 @@ setup Miniconda without MKL in a separate environment:
 
        $EIDOLONHOME/run.sh --setting userplugindir /dir/containing/plugindir ...
     
+### Deformetrica
+
+This plugin includes a compiled binary of Deformetrica (http://www.deformetrica.org). 
+Deformetrica is Copyright 2013-2018 Institut National de Recherche en Informatique et en Automatique (INRIA) and the University of Utah.
