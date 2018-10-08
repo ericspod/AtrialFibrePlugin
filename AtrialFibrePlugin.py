@@ -48,6 +48,7 @@ from eidolon import (
 import eidolon, ui
 
 import numpy as np
+from scipy.spatial import cKDTree
 
 plugindir= os.path.dirname(os.path.abspath(__file__)) # this file's directory
 
@@ -269,6 +270,8 @@ def loadArchitecture(path,section):
     ground=ast.literal_eval(c.get(section,'ground')) # per region
     appendageregion=ast.literal_eval(c.get(section,'appendageregion'))
     appendagenode=ast.literal_eval(c.get(section,'appendagenode'))
+    appendagelmindex=ast.literal_eval(c.get(section,'appendagelmindex'))
+    
 #    types=ast.literal_eval(c.get(section,'type')) # per region    
     
     # indices that don't exist are for landmarks that need to be calculated
@@ -286,10 +289,11 @@ def loadArchitecture(path,section):
         if len(lr)>2:
             allregions.append(lr)
 
-    return landmarks,lmlines,allregions,lmstim,lmground, appendageregion,appendagenode
+    return landmarks,lmlines,allregions,lmstim,lmground, appendageregion,appendagenode,appendagelmindex
     
 
 def writeMeshFile(filename,nodes,inds,nodegroup,indgroup,dim):
+    '''Write a medit format mesh file to `filename'.'''
     with open(filename,'w') as o:
         print('MeshVersionFormatted 1',file=o)
         print('Dimension %i'%dim,file=o)
@@ -312,6 +316,24 @@ def writeMeshFile(filename,nodes,inds,nodegroup,indgroup,dim):
             group=0 if indgroup is None else indgroup[n]
             
             print(group,file=o)
+
+
+def createNodeQuery(nodes):
+    '''
+    Create a cKDTree object from `nodes' and return a query function which accepts a position and radius value. The
+    function will return the nearest point index to the given position if radius<=0 and a list of indices of points
+    within the given radius of the position otherwise.
+    '''
+    tree=cKDTree(np.asarray(list(map(tuple,nodes))))
+    
+    def _query(pos,radius=0):
+        pos=tuple(pos)
+        if radius<=0:
+            return tree.query(pos)[1],tree.data
+        else:
+            return tree.query_ball_point(pos,radius),tree.data
+        
+    return _query
 
 
 def registerSubjectToTarget(subjectObj,targetObj,targetTrans,outdir,decimpath,VTK):
@@ -372,7 +394,12 @@ def transferLandmarks(archFilename,fieldname,targetObj,targetTrans,subjectObj,ou
     decimated=os.path.join(outdir,decimatedFile)
     registered=os.path.join(outdir,registeredFile)
     
-    lmarks=loadArchitecture(archFilename,fieldname)[0]
+    arch=loadArchitecture(archFilename,fieldname)
+    lmarks,lines=arch[:2]
+    appendagelmindex=arch[-1]
+    
+    # append the index for the estimated appendage node, this will have to be adjusted manually after registration
+    lmarks.append(appendagelmindex) 
     
     reg=VTK.loadObject(registered) # mesh registered to target
     dec=VTK.loadObject(decimated) # decimated unregistered mesh
@@ -385,21 +412,20 @@ def transferLandmarks(archFilename,fieldname,targetObj,targetTrans,subjectObj,ou
     targetTrans=targetTrans or eidolon.transform()
     lmpoints=[(targetTrans*tnodes[m],m) for m in lmarks] # (transformed landmark node, index) pairs
     
-    # TODO: use scipy.spatial.cKDTree?
-#    def getNearestPointIndex(pt,nodes):
-#        '''Find the index in `nodes' whose vector is closest to `pt'.'''
-#        return min(range(len(nodes)),key=lambda i:pt.distToSq(nodes[i]))
-    
     # find the points in the registered mesh closest to the landmark points in the target object
-    rpoints=[(findNearestIndex(pt,rnodes),m) for pt,m in lmpoints] 
+    query=createNodeQuery(rnodes)
+    rpoints=[(query(pt)[0],m) for pt,m in lmpoints] 
     
-    # find the subject nodes closes to landmark points in the decimated mesh (which at the same indices as the registered mesh)
-    spoints=[(findNearestIndex(dnodes[i],snodes),m) for i,m in rpoints]
+    # find the subject nodes closes to landmark points in the decimated mesh (which are at the same indices as in the registered mesh)
+    query=createNodeQuery(snodes)
+    spoints=[(query(dnodes[i])[0],m) for i,m in rpoints]
         
     assert len(spoints)==len(lmpoints)
     assert all(p[0] is not None for p in spoints)
     
-    return spoints # return list (i,m) pairs where node index i in the subject mesh is landmark m
+    slines=[l for l in lines if max(l)<len(spoints)]
+    
+    return spoints,slines # return list (i,m) pairs where node index i in the subject mesh is landmark m
 
 
 def generateTriAdj(tris):
@@ -811,7 +837,7 @@ def calculateGradientDirs(nodes,edges,gradientField):
 
 @timing
 def calculateDirectionField(obj,landmarkObj,regions,regtype,tempdir,VTK):
-    _,lmlines,allregions,lmstim,lmground,_,_=loadArchitecture(architecture,regtype)
+    lmlines,allregions,lmstim,lmground=loadArchitecture(architecture,regtype)[1:5]
     
     regions=regions or list(range(len(allregions)))
     
@@ -1313,7 +1339,7 @@ class AtrialFibreProject(Project):
             self.addMesh(obj)
             
             registered=os.path.join(tempdir,registeredFile)
-            regobj=self.VTK.loadObject(registered,'RegisteredMesh')
+            regobj=self.VTK.loadObject(registered,regtype+'_RegMesh')
             self.addMesh(regobj)
             
         self.mgr.runTasks(_add())
@@ -1331,37 +1357,48 @@ class AtrialFibreProject(Project):
         
         if surface is None:
             self.mgr.showMsg('Cannot find surface object %r'%self.configMap[meshname])
+            return
         elif landmarks is None:
             self.mgr.showMsg('Cannot find landmark object %r'%(regtype+'nodes'))
-        else:
-            other.setEnabled(False)
-            edit.setVisible(False)
-            done.setVisible(True)
-            cancel.setVisible(True)
+            return
+        
+        # adjust button visibility
+        other.setEnabled(False)
+        edit.setVisible(False)
+        done.setVisible(True)
+        cancel.setVisible(True)
+        
+        try: # if the edit button's been already clicked, disconnect existing slots
+            done.clicked.disconnect()
+            cancel.clicked.disconnect()
+        except:
+            pass
+
+        @cancel.clicked.connect
+        def _cancel():
+            '''Resets UI when the cancel button is pressed.'''
+            other.setEnabled(True)
+            edit.setVisible(True)
+            done.setVisible(False)
+            cancel.setVisible(False)
+            self.mgr.removeSceneObjectRepr(self.editRep)
+            self.editObj=None
+            self.editSurface=None
+            self.editRep=None
+        
+        @done.clicked.connect
+        def _done():
+            '''Transfer data from moved repr to landmark object, save, and reset UI.'''
+            #landmarks.datasets[0].setNodes(self.editRep.nodes[:,0])
+            #f=landmarks.saveObject(landmarks.getObjFiles()[0])
+            #self.mgr.checkFutureResult(f)
+            cancel.clicked.emit() # do cancel's cleanup
             
-            try:
-                done.clicked.disconnect()
-                cancel.clicked.disconnect()
-            except:
-                pass
-    
-            @cancel.clicked.connect
-            def _cancel():
-                other.setEnabled(True)
-                edit.setVisible(True)
-                done.setVisible(False)
-                cancel.setVisible(False)
+        self.editSurface=surface
+        self.editObj=landmarks
             
-            @done.clicked.connect
-            def _done():
-                cancel.clicked.emit() # do cancel's cleanup first
-                self._applyEditedLandmarks()
-                
-            self.editSurface=surface
-            self.editObj=landmarks
-                
-            f=self._startEditLandmarks()
-            self.mgr.checkFutureResult(f)
+        f=self._startEditLandmarks()
+        self.mgr.checkFutureResult(f)
                 
     @taskmethod('Starting to edit landmarks')
     def _startEditLandmarks(self,task):
@@ -1369,21 +1406,46 @@ class AtrialFibreProject(Project):
             rep=self.editSurface.createRepr(ReprType._volume,0)
             self.mgr.addSceneObjectRepr(rep)
             
-        noderep=self.editObj.createRepr(ReprType._node)
+        noderep=self.editObj.createRepr(ReprType._line,matname='Red')
         self.mgr.addSceneObjectRepr(noderep)
-        
         self.editRep=noderep
+        
+        landmarks=self.editObj.datasets[0].getNodes()
+        editnodes=self.editSurface.datasets[0].getNodes()
+        query=createNodeQuery(editnodes)
+        
+#        @eidolon.delayedcall(0.5)
+#        def _update():
+#            f=self.mgr.updateSceneObjectRepr(noderep)
+#            self.mgr.checkFutureResult(f)
+        
+        def _select(handle,index,release):
+            if release: # on mouse release update the repr
+#                _update()
+                f=self.mgr.updateSceneObjectRepr(noderep)
+                self.mgr.checkFutureResult(f)
+            else:
+                oldpos=handle.positionOffset
+                newpos=editnodes[index]
+                
+                for n in range(noderep.nodes.n()): # replace every old position with the new
+                    if noderep.nodes[n,0]==oldpos:
+                        noderep.nodes[n,0]=newpos
         
         @eidolon.setmethod(noderep)
         def createHandles():
-            h= rep.__old__createHandles()
-            #TODO: create control handles here
+            '''Overrides the default node creation method to create selection handles instead.'''
+            handles=[]
+            
+            for ind in range(landmarks.n()):
+                h=eidolon.NodeSelectHandle(landmarks[ind],ind,query,_select)
+                handles.append(h)
+                
+            return handles
             
         self.mgr.showHandle(noderep,True)
+        self.mgr.setCameraSeeAll()
         
-    def _applyEditedLandmarks(self):
-        pass
-    
     def _divideRegions(self,meshname,regtype):
         mesh=self.getProjectObj(self.configMap.get(meshname,''))
         points=self.getProjectObj(regtype+'nodes')
@@ -1448,7 +1510,7 @@ class AtrialFibreProject(Project):
                 
                 self.mgr.setCameraSeeAll()
                 
-                showElemDirs(tetmesh,(50,50,100),self.mgr)
+                showElemDirs(tetmesh,(50,50,100),self.mgr) # TODO: replace with createRepr call
                 
             self.mgr.runTasks([_save(),_load()])
 
@@ -1533,16 +1595,16 @@ class AtrialFibrePlugin(ScenePlugin):
         output=registerSubjectToTarget(meshObj,atlasObj,atlasTrans,outdir,self.decimate,self.VTK)
         eidolon.printFlush(output)
         
-        points=transferLandmarks(architecture,regtype,atlasObj,atlasTrans,meshObj,outdir,self.VTK)
+        points,lines=transferLandmarks(architecture,regtype,atlasObj,atlasTrans,meshObj,outdir,self.VTK)
         
         subjnodes=meshObj.datasets[0].getNodes()
-        ptds=eidolon.PyDataSet('pts',[subjnodes[n[0]] for n in points],[('landmarkField','',points)])
+        ptds=eidolon.PyDataSet('pts',[subjnodes[n[0]] for n in points],[('lines',ElemType._Line1NL,lines)])
         
         return eidolon.MeshSceneObject('LM',ptds)
     
     @taskmethod('Dividing mesh into regions')
     def divideRegions(self,mesh,points,regtype,task=None):
-        _,_,lmregions,_,_,appendageregion,appendagenode=loadArchitecture(architecture,regtype)
+        _,_,lmregions,_,_,appendageregion,appendagenode,_=loadArchitecture(architecture,regtype)
         
         filledregions,linemap=generateRegionField(mesh,points,lmregions,appendageregion,appendagenode,task)
         mesh.datasets[0].setDataField(filledregions)
