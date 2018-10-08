@@ -1352,7 +1352,7 @@ class AtrialFibreProject(Project):
             
         surface=self.getProjectObj(self.configMap[meshname])
         landmarks=self.getProjectObj(regtype+'nodes')
-        landmarkMap={}
+        landmarkMap={} # maps landmark index to surface node index
         
         if surface is None:
             self.mgr.showMsg('Cannot find surface object %r'%self.configMap[meshname])
@@ -1386,11 +1386,16 @@ class AtrialFibreProject(Project):
         @done.clicked.connect
         def _done():
             '''Transfer data from moved repr to landmark object, save, and reset UI.'''
-            #landmarks.datasets[0].setNodes(self.editRep.nodes[:,0])
-            #f=landmarks.saveObject(landmarks.getObjFiles()[0])
-            #self.mgr.checkFutureResult(f)
-            cancel.clicked.emit() # do cancel's cleanup
+            lmnodes=landmarks.datasets[0].getNodes()
+            surfacenodes=surface.datasets[0].getNodes()
             
+            for i,j in landmarkMap.items():
+                lmnodes[i]=surfacenodes[j]
+                
+            f=landmarks.saveObject(landmarks.getObjFiles()[0])
+            self.mgr.checkFutureResult(f)
+                
+            cancel.clicked.emit() # do cancel's cleanup
             
         f=self._startEditLandmarks(surface,landmarks,landmarkMap)
         self.mgr.checkFutureResult(f)
