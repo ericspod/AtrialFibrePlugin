@@ -1194,8 +1194,6 @@ class AtrialFibreProject(Project):
         
         self.backDir=self.logDir=self.getProjectFile('logs')
         
-        self.editObj=None # landmark object being edited
-        self.editSurface=None # surface landmarks are moved around
         self.editRep=None # node representation being edited
         
         self.addHandlers()
@@ -1354,6 +1352,7 @@ class AtrialFibreProject(Project):
             
         surface=self.getProjectObj(self.configMap[meshname])
         landmarks=self.getProjectObj(regtype+'nodes')
+        landmarkMap={}
         
         if surface is None:
             self.mgr.showMsg('Cannot find surface object %r'%self.configMap[meshname])
@@ -1382,8 +1381,6 @@ class AtrialFibreProject(Project):
             done.setVisible(False)
             cancel.setVisible(False)
             self.mgr.removeSceneObjectRepr(self.editRep)
-            self.editObj=None
-            self.editSurface=None
             self.editRep=None
         
         @done.clicked.connect
@@ -1394,39 +1391,34 @@ class AtrialFibreProject(Project):
             #self.mgr.checkFutureResult(f)
             cancel.clicked.emit() # do cancel's cleanup
             
-        self.editSurface=surface
-        self.editObj=landmarks
             
-        f=self._startEditLandmarks()
+        f=self._startEditLandmarks(surface,landmarks,landmarkMap)
         self.mgr.checkFutureResult(f)
                 
     @taskmethod('Starting to edit landmarks')
-    def _startEditLandmarks(self,task):
-        if not self.editSurface.reprs:
-            rep=self.editSurface.createRepr(ReprType._volume,0)
+    def _startEditLandmarks(self,surface,landmarks,landmarkMap,task):
+        if not surface.reprs:
+            rep=surface.createRepr(ReprType._volume,0)
             self.mgr.addSceneObjectRepr(rep)
             
-        noderep=self.editObj.createRepr(ReprType._line,matname='Red')
+        noderep=landmarks.createRepr(ReprType._line,matname='Red')
         self.mgr.addSceneObjectRepr(noderep)
         self.editRep=noderep
         
-        landmarks=self.editObj.datasets[0].getNodes()
-        editnodes=self.editSurface.datasets[0].getNodes()
+        landmarknodes=landmarks.datasets[0].getNodes()
+        editnodes=surface.datasets[0].getNodes()
         query=createNodeQuery(editnodes)
         
-#        @eidolon.delayedcall(0.5)
-#        def _update():
-#            f=self.mgr.updateSceneObjectRepr(noderep)
-#            self.mgr.checkFutureResult(f)
-        
         def _select(handle,index,release):
+            '''Handle selection callback function, updates landmarkMap and node positions in noderep.'''
             if release: # on mouse release update the repr
-#                _update()
                 f=self.mgr.updateSceneObjectRepr(noderep)
                 self.mgr.checkFutureResult(f)
             else:
                 oldpos=handle.positionOffset
                 newpos=editnodes[index]
+                
+                landmarkMap[handle.value]=index
                 
                 for n in range(noderep.nodes.n()): # replace every old position with the new
                     if noderep.nodes[n,0]==oldpos:
@@ -1437,8 +1429,8 @@ class AtrialFibreProject(Project):
             '''Overrides the default node creation method to create selection handles instead.'''
             handles=[]
             
-            for ind in range(landmarks.n()):
-                h=eidolon.NodeSelectHandle(landmarks[ind],ind,query,_select)
+            for ind in range(landmarknodes.n()):
+                h=eidolon.NodeSelectHandle(landmarknodes[ind],ind,query,_select)
                 handles.append(h)
                 
             return handles
