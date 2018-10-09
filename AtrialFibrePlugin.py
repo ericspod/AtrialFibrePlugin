@@ -308,11 +308,12 @@ def createNodeQuery(nodes):
     '''
     Create a cKDTree object from `nodes' and return a query function which accepts a position and radius value. The
     function will return the nearest point index to the given position if radius<=0 and a list of indices of points
-    within the given radius of the position otherwise.
+    within the given radius of the position otherwise. The node list is also returned as a second return value.
     '''
     tree=cKDTree(np.asarray(list(map(tuple,nodes))))
     
     def _query(pos,radius=0):
+        '''Query `nodes' for the nearest node to `pos' if `radius'<=0 or a list of those within `radius' otherwise.'''
         pos=tuple(pos)
         if radius<=0:
             return tree.query(pos)[1],tree.data
@@ -1167,6 +1168,43 @@ class AtrialFibrePropWidget(ui.QtWidgets.QWidget,ui.Ui_AtrialFibre):
         super(AtrialFibrePropWidget,self).__init__(parent)
         self.setupUi(self)
         
+        self.endoDoneButton.setVisible(False)
+        self.endoCancelButton.setVisible(False)
+        self.epiDoneButton.setVisible(False)
+        self.epiCancelButton.setVisible(False)
+        
+    def startEdit(self,regtype):
+        '''Adjust button visibility and connected slots when starting to edit endo or epi nodes.'''
+        if regtype==regTypes._endo:
+            edit,other=self.endoEdit,self.epiEdit
+            done,cancel=self.endoDoneButton,self.endoCancelButton
+        else:
+            edit,other=self.epiEdit,self.endoEdit
+            done,cancel=self.epiDoneButton,self.epiCancelButton
+            
+        # adjust button visibility
+        other.setEnabled(False)
+        edit.setVisible(False)
+        done.setVisible(True)
+        cancel.setVisible(True)
+        
+        try: # if the edit button's been already clicked, disconnect existing slots
+            done.clicked.disconnect()
+            cancel.clicked.disconnect()
+        except:
+            pass
+        
+        return done,cancel
+    
+    def stopEdit(self):
+        '''Set UI back to default when done editing.'''
+        self.endoEdit.setVisible(True)
+        self.epiEdit.setVisible(True)
+        self.endoDoneButton.setVisible(False)
+        self.endoCancelButton.setVisible(False)
+        self.epiDoneButton.setVisible(False)
+        self.epiCancelButton.setVisible(False)
+        
 
 class AtrialFibreProject(Project):
     def __init__(self,name,parentdir,mgr):
@@ -1221,11 +1259,6 @@ class AtrialFibreProject(Project):
         self.afprop.epiEdit.clicked.connect(lambda:self._editLandmarks(objNames._epimesh,regTypes._epi))
         
         self.afprop.genButton.clicked.connect(self._generate)
-        
-        self.afprop.endoDoneButton.setVisible(False)
-        self.afprop.endoCancelButton.setVisible(False)
-        self.afprop.epiDoneButton.setVisible(False)
-        self.afprop.epiCancelButton.setVisible(False)
         
         return prop
         
@@ -1329,13 +1362,6 @@ class AtrialFibreProject(Project):
         self.mgr.runTasks(_add())
         
     def _editLandmarks(self,meshname,regtype):
-        if regtype==regTypes._endo:
-            edit,other=self.afprop.endoEdit,self.afprop.epiEdit
-            done,cancel=self.afprop.endoDoneButton,self.afprop.endoCancelButton
-        else:
-            edit,other=self.afprop.epiEdit,self.afprop.endoEdit
-            done,cancel=self.afprop.epiDoneButton,self.afprop.epiCancelButton
-            
         surface=self.getProjectObj(self.configMap[meshname])
         landmarks=self.getProjectObj(regtype+'nodes')
         landmarkMap={} # maps landmark index to surface node index
@@ -1347,25 +1373,12 @@ class AtrialFibreProject(Project):
             self.mgr.showMsg('Cannot find landmark object %r'%(regtype+'nodes'))
             return
         
-        # adjust button visibility
-        other.setEnabled(False)
-        edit.setVisible(False)
-        done.setVisible(True)
-        cancel.setVisible(True)
+        done,cancel=self.afprop.startEdit(regtype) # adjust UI and get done and cancel buttons
         
-        try: # if the edit button's been already clicked, disconnect existing slots
-            done.clicked.disconnect()
-            cancel.clicked.disconnect()
-        except:
-            pass
-
         @cancel.clicked.connect
         def _cancel():
             '''Resets UI when the cancel button is pressed.'''
-            other.setEnabled(True)
-            edit.setVisible(True)
-            done.setVisible(False)
-            cancel.setVisible(False)
+            self.afprop.stopEdit()
             self.mgr.removeSceneObjectRepr(self.editRep)
             self.editRep=None
         
