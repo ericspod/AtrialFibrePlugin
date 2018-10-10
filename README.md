@@ -12,12 +12,15 @@ Copyright (C) 2018 Eric Kerfoot, King's College London, all rights reserved, see
 3. Numpy with MKL has problems with concurrency which will cause random hangs during processing. The solution is to
 setup Miniconda without MKL in a separate environment:
 
-       conda create -n nomkl python=3.6.3 nomkl numpy scipy cython imageio pyqt six pandas
+       conda create -n nomkl python=3.6.3 nomkl numpy scipy cython imageio pyqt six pandas matplotlib pytables
     
 4. The plugin directory must be placed in `$HOME/.eidolon/plugins` or some other directory given on the command line:
 
        $EIDOLONHOME/run.sh --setting userplugindir /dir/containing/plugindir ...
-    
+
+5. Sfepy
+INSTALL PROPERLY
+       
 ### Deformetrica
 
 This plugin includes a compiled binary of Deformetrica (http://www.deformetrica.org). 

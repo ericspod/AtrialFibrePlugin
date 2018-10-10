@@ -366,7 +366,8 @@ def registerSubjectToTarget(subjectObj,targetObj,targetTrans,outdir,decimpath,VT
     ret,output=eidolon.execBatchProgram(decimpath,tmpfile,dpath,'-reduceby',sizepercent,'-ascii',logcmd=True)
     assert ret==0,output
     
-    ret,output=eidolon.execBatchProgram(deformExe,"registration", "3D", modelFile, datasetFile, optimFile, "--output-dir=.",cwd=outdir,logcmd=True)
+    env={'LD_LIBRARY_PATH':deformDir}
+    ret,output=eidolon.execBatchProgram(deformExe,"registration", "3D", modelFile, datasetFile, optimFile, "--output-dir=.",cwd=outdir,env=env,logcmd=True)
     assert ret==0,output
     
     return output
@@ -1160,7 +1161,6 @@ def calculateTetDirections(tetmesh,endomesh,epimesh,tempdir,interpFunc,VTK,task=
     
     return elemdirfield
     
-            
 ### Project objects
 
 class AtrialFibrePropWidget(ui.QtWidgets.QWidget,ui.Ui_AtrialFibre):
