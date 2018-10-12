@@ -1434,7 +1434,7 @@ class AtrialFibreProject(Project):
             handles=[]
             
             for ind in range(landmarknodes.n()):
-                h=eidolon.NodeSelectHandle(landmarknodes[ind],ind,query,_select)
+                h=eidolon.NodeSelectHandle(landmarknodes[ind],ind,query,_select,str(ind))
                 handles.append(h)
                 
             return handles
