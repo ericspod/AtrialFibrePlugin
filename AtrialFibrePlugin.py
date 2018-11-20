@@ -29,7 +29,7 @@ except ImportError:
 
 from eidolon import (
         ScenePlugin, Project, avg, vec3, successive, first, RealMatrix, IndexMatrix, StdProps, timing, ReprType,
-        listToMatrix,MeshSceneObject, BoundBox, ElemType, reduceMesh, PyDataSet, taskmethod, taskroutine
+        listToMatrix,MeshSceneObject, BoundBox, ElemType, reduceMesh, PyDataSet, taskmethod, taskroutine, printFlush
         )
 import eidolon, ui
 
@@ -1200,6 +1200,8 @@ class AtrialFibrePropWidget(ui.QtWidgets.QWidget,ui.Ui_AtrialFibre):
         '''Set UI back to default when done editing.'''
         self.endoEdit.setVisible(True)
         self.epiEdit.setVisible(True)
+        self.endoEdit.setEnabled(True)
+        self.epiEdit.setEnabled(True)
         self.endoDoneButton.setVisible(False)
         self.endoCancelButton.setVisible(False)
         self.epiDoneButton.setVisible(False)
@@ -1413,6 +1415,8 @@ class AtrialFibreProject(Project):
         editnodes=surface.datasets[0].getNodes()
         query=createNodeQuery(editnodes)
         
+        handlecol=eidolon.color(1,0,0,1)
+        
         def _select(handle,index,release):
             '''Handle selection callback function, updates landmarkMap and node positions in noderep.'''
             if release: # on mouse release update the repr
@@ -1434,7 +1438,8 @@ class AtrialFibreProject(Project):
             handles=[]
             
             for ind in range(landmarknodes.n()):
-                h=eidolon.NodeSelectHandle(landmarknodes[ind],ind,query,_select,str(ind))
+                pos=landmarknodes[ind]
+                h=eidolon.NodeSelectHandle(pos,ind,query,_select,'  '+str(ind),handlecol)
                 handles.append(h)
                 
             return handles
