@@ -27,11 +27,11 @@ try:
 except ImportError:
     warnings.warn('SfePy needs to be installed or in PYTHONPATH to generate fiber directions.')
 
-from eidolon import (
+from eidolon import ( ui,
         ScenePlugin, Project, avg, vec3, successive, first, RealMatrix, IndexMatrix, StdProps, timing, ReprType,
         listToMatrix,MeshSceneObject, BoundBox, ElemType, reduceMesh, PyDataSet, taskmethod, taskroutine, printFlush
         )
-import eidolon, ui
+import eidolon
 
 import numpy as np
 from scipy.spatial import cKDTree
@@ -1374,6 +1374,9 @@ class AtrialFibreProject(Project):
         elif landmarks is None:
             self.mgr.showMsg('Cannot find landmark object %r'%(regtype+'nodes'))
             return
+            
+        f=self._startEditLandmarks(surface,landmarks,landmarkMap)
+        self.mgr.checkFutureResult(f)
         
         done,cancel=self.afprop.startEdit(regtype) # adjust UI and get done and cancel buttons
         
@@ -1397,9 +1400,6 @@ class AtrialFibreProject(Project):
             self.mgr.checkFutureResult(f)
                 
             cancel.clicked.emit() # do cancel's cleanup
-            
-        f=self._startEditLandmarks(surface,landmarks,landmarkMap)
-        self.mgr.checkFutureResult(f)
                 
     @taskmethod('Starting to edit landmarks')
     def _startEditLandmarks(self,surface,landmarks,landmarkMap,task):
